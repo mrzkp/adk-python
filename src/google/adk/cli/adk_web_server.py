@@ -600,10 +600,28 @@ def _setup_instrumentation_lib_if_installed():
     from opentelemetry.instrumentation.google_genai import GoogleGenAiSdkInstrumentor
 
     GoogleGenAiSdkInstrumentor().instrument()
-  except ImportError:
+  except (ImportError, AttributeError):
     logger.warning(
         "Unable to import GoogleGenAiSdkInstrumentor - some"
         " telemetry will be disabled. Make sure to install google-adk[otel-gcp]"
+    )
+  try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    HTTPXClientInstrumentor().instrument()
+  except (ImportError, AttributeError):
+    logger.warning(
+        "telemetry enabled but proceeding without HTTPX instrumentation,"
+        " because google-adk[otel-gcp] has not been installed"
+    )
+  try:
+    from opentelemetry.instrumentation.grpc import GrpcInstrumentorClient
+
+    GrpcInstrumentorClient().instrument()
+  except (ImportError, AttributeError):
+    logger.warning(
+        "telemetry enabled but proceeding without gRPC instrumentation,"
+        " because google-adk[otel-gcp] has not been installed"
     )
 
 

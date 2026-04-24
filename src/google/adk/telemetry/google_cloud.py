@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import cast
 from typing import Optional
 from typing import TYPE_CHECKING
+import uuid
 
 import google.auth
 from opentelemetry.sdk._logs import LogRecordProcessor
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs.export import SimpleLogRecordProcessor
 from opentelemetry.sdk.metrics.export import MetricReader
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import OTELResourceDetector
@@ -35,10 +38,10 @@ from .setup import OTelHooks
 if TYPE_CHECKING:
   from google.auth.credentials import Credentials
 
-logger = logging.getLogger('google_adk.' + __name__)
+logger = logging.getLogger("google_adk." + __name__)
 
-_GCP_LOG_NAME_ENV_VARIABLE_NAME = 'GOOGLE_CLOUD_DEFAULT_LOG_NAME'
-_DEFAULT_LOG_NAME = 'adk-otel'
+_GCP_LOG_NAME_ENV_VARIABLE_NAME = "GOOGLE_CLOUD_DEFAULT_LOG_NAME"
+_DEFAULT_LOG_NAME = "adk-otel"
 
 
 def get_gcp_exporters(
@@ -65,8 +68,8 @@ def get_gcp_exporters(
 
   if not project_id:
     logger.warning(
-        'Cannot determine GCP Project. OTel GCP Exporters cannot be set up.'
-        ' Please make sure to log into correct GCP Project.'
+        "Cannot determine GCP Project. OTel GCP Exporters cannot be set up."
+        " Please make sure to log into correct GCP Project."
     )
     return OTelHooks()
 
@@ -83,7 +86,10 @@ def get_gcp_exporters(
 
   log_record_processors: list[LogRecordProcessor] = []
   if enable_cloud_logging:
-    exporter = _get_gcp_logs_exporter(project_id)
+    exporter = _get_gcp_logs_exporter(
+        project_id=project_id,
+        credentials=credentials,
+    )
     if exporter:
       log_record_processors.append(exporter)
 
@@ -100,10 +106,19 @@ def _get_gcp_span_exporter(credentials: Credentials) -> SpanProcessor:
   from google.auth.transport.requests import AuthorizedSession
   from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
+  headers = None
+  if os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY"):
+    import opentelemetry
+
+    otlp_http_version = (
+        opentelemetry.exporter.otlp.proto.http.version.__version__
+    )
+    headers = {"User-Agent": f"OTel-OTLP-Exporter-Python/{otlp_http_version}"}
   return BatchSpanProcessor(
       OTLPSpanExporter(
           session=AuthorizedSession(credentials=credentials),
-          endpoint='https://telemetry.googleapis.com/v1/traces',
+          endpoint="https://telemetry.googleapis.com/v1/traces",
+          headers=headers,
       )
   )
 
@@ -117,7 +132,16 @@ def _get_gcp_metrics_exporter(project_id: str) -> MetricReader:
   )
 
 
-def _get_gcp_logs_exporter(project_id: str) -> LogRecordProcessor:
+def _get_gcp_logs_exporter(
+    project_id: str,
+    credentials: Optional["Credentials"] = None,
+) -> LogRecordProcessor:
+  if os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+    return _get_agent_engine_logs_exporter(
+        credentials=credentials,
+        project_id=project_id,
+    )
+
   from opentelemetry.exporter.cloud_logging import CloudLoggingExporter
 
   default_log_name = os.environ.get(
@@ -140,8 +164,29 @@ def get_gcp_resource(project_id: Optional[str] = None) -> Resource:
     project_id: project id to fill out as `gcp.project_id` on the OTEL resource.
     This may be overwritten by OTELResourceDetector, if `gcp.project_id` is present in `OTEL_RESOURCE_ATTRIBUTES` env var.
   """
+  agent_engine_id = os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_ID", "")
+  if agent_engine_id:
+    resource = Resource.create(
+        attributes={
+            "gcp.project_id": project_id,
+            "cloud.account.id": project_id,
+            "cloud.provider": "gcp",
+            "cloud.platform": "gcp.agent_engine",
+            "service.name": agent_engine_id,
+            "service.version": os.getenv(
+                "GOOGLE_CLOUD_AGENT_ENGINE_RUNTIME_REVISION_ID", ""
+            ),
+            "service.instance.id": f"{uuid.uuid4().hex}-{os.getpid()}",
+            "cloud.region": (
+                os.getenv("GOOGLE_CLOUD_AGENT_ENGINE_LOCATION", "")
+                or os.getenv("GOOGLE_CLOUD_LOCATION", "")
+            ),
+        }
+    ).merge(OTELResourceDetector().detect())
+    return resource
+
   resource = Resource(
-      attributes={'gcp.project_id': project_id}
+      attributes={"gcp.project_id": project_id}
       if project_id is not None
       else {}
   )
@@ -154,7 +199,79 @@ def get_gcp_resource(project_id: Optional[str] = None) -> Resource:
     )
   except ImportError:
     logger.warning(
-        'Cloud not import opentelemetry.resourcedetector.gcp_resource_detector'
-        ' GCE, GKE or CloudRun related resource attributes may be missing'
+        "Cloud not import opentelemetry.resourcedetector.gcp_resource_detector"
+        " GCE, GKE or CloudRun related resource attributes may be missing"
     )
   return resource
+
+
+def _get_agent_engine_logs_exporter(
+    *,
+    credentials: "Credentials",
+    project_id: str,
+):
+  """Configures logging for Agent Engine.
+
+  Args:
+    credentials: Credentials to use for export calls.
+    project_id: Project to which to write logs.
+  """
+  try:
+    from google.cloud.logging_v2.services import logging_service_v2
+    from google.cloud.logging_v2.services.logging_service_v2.transports import grpc
+    from opentelemetry.exporter import cloud_logging
+  except (ImportError, AttributeError):
+    logging.warning(
+        "%s is not installed. Please call 'pip install %s'.",
+        "opentelemetry-exporter-gcp-logging",
+        "opentelemetry-exporter-gcp-logging",
+    )
+    logging.warning(
+        "proceeding with logging disabled because not all packages for"
+        " logging have been installed"
+    )
+    return
+
+  if "gen_ai_latest_experimental" in os.getenv(
+      "OTEL_SEMCONV_STABILITY_OPT_IN", ""
+  ).split(","):
+    # Specify credentials to avoid expensive call to `google.auth.default()`
+    channel = grpc.LoggingServiceV2GrpcTransport.create_channel(
+        credentials=credentials,
+        # pylint: disable-next=protected-access
+        options=cloud_logging._OPTIONS,
+    )
+    return BatchLogRecordProcessor(
+        cloud_logging.CloudLoggingExporter(
+            client=logging_service_v2.LoggingServiceV2Client(
+                transport=grpc.LoggingServiceV2GrpcTransport(
+                    credentials=credentials,
+                    channel=channel,
+                ),
+            ),
+            project_id=project_id,
+            default_log_name=os.getenv(
+                "GCP_DEFAULT_LOG_NAME", "adk-on-agent-engine"
+            ),
+        ),
+    )
+  else:
+
+    class _SimpleLogRecordProcessor(SimpleLogRecordProcessor):
+
+      def force_flush(
+          self, timeout_millis: int = 30000
+      ) -> bool:  # pylint: disable=no-self-use
+        _ = sys.stdout.flush()
+        _ = sys.stderr.flush()
+        return super().force_flush()
+
+    return _SimpleLogRecordProcessor(
+        cloud_logging.CloudLoggingExporter(
+            project_id=project_id,
+            default_log_name=os.getenv(
+                "GCP_DEFAULT_LOG_NAME", "adk-on-agent-engine"
+            ),
+            structured_json_file=sys.stdout,
+        ),
+    )
