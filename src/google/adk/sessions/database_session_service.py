@@ -416,6 +416,7 @@ class DatabaseSessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     # 1. Populate states.
     # 2. Build storage session object

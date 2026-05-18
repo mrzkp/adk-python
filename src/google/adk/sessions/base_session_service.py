@@ -65,6 +65,7 @@ class BaseSessionService(abc.ABC):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     """Creates a new session.
 
@@ -74,6 +75,8 @@ class BaseSessionService(abc.ABC):
       state: the initial state of the session.
       session_id: the client-provided id of the session. If not provided, a
         generated ID will be used.
+      **kwargs: Additional keyword arguments to pass to the session creation,
+        such as 'ttl' or 'expire_time'. Supported by some implementations.
 
     Returns:
       session: The newly created session instance.

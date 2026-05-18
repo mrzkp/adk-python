@@ -161,6 +161,7 @@ class SqliteSessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     if session_id:
       session_id = session_id.strip()

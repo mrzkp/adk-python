@@ -82,12 +82,14 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     return self._create_session_impl(
         app_name=app_name,
         user_id=user_id,
         state=state,
         session_id=session_id,
+        **kwargs,
     )
 
   def create_session_sync(
@@ -97,6 +99,7 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     logger.warning('Deprecated. Please migrate to the async method.')
     return self._create_session_impl(
@@ -104,6 +107,7 @@ class InMemorySessionService(BaseSessionService):
         user_id=user_id,
         state=state,
         session_id=session_id,
+        **kwargs,
     )
 
   def _create_session_impl(
@@ -113,6 +117,7 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      **kwargs: Any,
   ) -> Session:
     if session_id and self._get_session_impl(
         app_name=app_name, user_id=user_id, session_id=session_id
