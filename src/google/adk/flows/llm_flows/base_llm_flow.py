@@ -976,6 +976,7 @@ class BaseLlmFlow(ABC):
         not llm_response.content
         and not llm_response.error_code
         and not llm_response.interrupted
+        and not llm_response.grounding_metadata
     ):
       return
 
@@ -1040,6 +1041,7 @@ class BaseLlmFlow(ABC):
         and not llm_response.output_transcription
         and not llm_response.usage_metadata
         and not llm_response.live_session_resumption_update
+        and not llm_response.grounding_metadata
     ):
       return
 
