@@ -720,31 +720,28 @@ def get_fast_api_app(
     import json
     import google.auth
     from google.adk.agents import Agent
-    import vertexai
     from vertexai import agent_engines
-
-    if express_mode:
-      api_key = os.environ.get("GOOGLE_API_KEY", None)
-      if not api_key:
-        raise ValueError(
-            "No GOOGLE_API_KEY found in environment variables for express mode."
-        )
-      vertexai.init(api_key=api_key)
-    else:
-      _, project_id = google.auth.default()
-      location = os.environ.get(
-          "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION",
-          os.environ.get("GOOGLE_CLOUD_LOCATION", None),
-      )
-      if not project_id or not location:
-        raise ValueError("No GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION found in"
-            " environment variables."
-        )
-      vertexai.init(project=project_id, location=location)
 
     # The tmp agent will be replaced by the adk server's runner and services.
     # It is specified here because it is a required argument to AdkApp.
     adk_app = agent_engines.AdkApp(agent=Agent(name="tmp"))
+    if express_mode:
+      api_key = os.environ.get("GOOGLE_API_KEY", None)
+      adk_app._tmpl_attrs["project"] = None
+      adk_app._tmpl_attrs["location"] = None
+      adk_app._tmpl_attrs["api_key"] = api_key
+    else:
+      project_id = google.auth.default()
+      location = os.environ.get(
+          "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION",
+          os.environ.get("GOOGLE_CLOUD_LOCATION", None),
+      )
+      logging.warning(
+          "[fast_api] project_id: %s, location: %s", project_id, location
+      )
+      adk_app._tmpl_attrs["project"] = project_id
+      adk_app._tmpl_attrs["location"] = location
+      adk_app._tmpl_attrs["api_key"] = None
     adk_app._tmpl_attrs["runner"] = None
     adk_app._tmpl_attrs["app_name"] = gemini_enterprise_app_name
     adk_app._tmpl_attrs["session_service"] = session_service
