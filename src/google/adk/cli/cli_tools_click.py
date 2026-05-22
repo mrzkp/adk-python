@@ -1698,6 +1698,16 @@ def cli_web(
         " https://docs.cloud.google.com/gemini/enterprise/docs/register-and-manage-an-adk-agent"
     ),
 )
+@click.option(
+    "--express_mode",
+    is_flag=True,
+    default=False,
+    help=(
+        "Whether or not to initialize the server in express mode. This is only"
+        " supported when gemini_enterprise_app_name is set. Defaults to"
+        " False."
+    ),
+)
 def cli_api_server(
     agents_dir: str,
     eval_storage_uri: str | None = None,
@@ -1719,6 +1729,7 @@ def cli_api_server(
     auto_create_session: bool = False,
     trigger_sources: list[str] | None = None,
     gemini_enterprise_app_name: str | None = None,
+    express_mode: bool = False,
 ):
   """Starts a FastAPI server for agents.
 
@@ -1752,6 +1763,7 @@ def cli_api_server(
           auto_create_session=auto_create_session,
           trigger_sources=trigger_sources,
           gemini_enterprise_app_name=gemini_enterprise_app_name,
+          express_mode=express_mode,
       ),
       host=host,
       port=port,

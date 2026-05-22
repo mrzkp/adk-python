@@ -69,11 +69,6 @@ _DOCKERFILE_TEMPLATE: Final[str] = """
 FROM python:3.11-slim
 WORKDIR /app
 
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y git && \
-    apt -y autoremove
-
 # Create a non-root user
 RUN adduser --disabled-password --gecos "" myuser
 
@@ -90,7 +85,7 @@ ENV GOOGLE_CLOUD_LOCATION={gcp_region}
 # Set up environment variables - End
 
 # Install ADK - Start
-# RUN pip install google-adk=={adk_version}
+RUN pip install google-adk=={adk_version}
 # Install ADK - End
 
 # Copy agent - Start
@@ -106,7 +101,7 @@ COPY --chown=myuser:myuser "agents/{app_name}/" "/app/agents/{app_name}/"
 
 EXPOSE {port}
 
-CMD adk {command} --port={port} {host_option} {service_option} {trace_to_cloud_option} {otel_to_cloud_option} {allow_origins_option} {a2a_option} {trigger_sources_option} {gemini_enterprise_option} "/app/agents"
+CMD adk {command} --port={port} {host_option} {service_option} {trace_to_cloud_option} {otel_to_cloud_option} {allow_origins_option} {a2a_option} {trigger_sources_option} {gemini_enterprise_option}{express_mode_option} "/app/agents"
 """
 
 _AGENT_ENGINE_CLASS_METHODS = [
@@ -723,6 +718,7 @@ def to_cloud_run(
         a2a_option=a2a_option,
         trigger_sources_option=trigger_sources_option,
         gemini_enterprise_option='',
+        express_mode_option='',
     )
     dockerfile_path = os.path.join(temp_folder, 'Dockerfile')
     os.makedirs(temp_folder, exist_ok=True)
@@ -1139,6 +1135,9 @@ def to_agent_engine(
           a2a_option='--a2a',
           trigger_sources_option=trigger_sources_option,
           gemini_enterprise_option=f'--gemini_enterprise_app_name={app_name}',
+          express_mode_option=(
+              ' --express_mode' if api_key and not project else ''
+          ),
       )
       with open('Dockerfile', 'w', encoding='utf-8') as f:
         f.write(dockerfile_content)
@@ -1307,6 +1306,7 @@ def to_gke(
             f'--trigger_sources={trigger_sources}' if trigger_sources else ''
         ),
         gemini_enterprise_option='',
+        express_mode_option='',
     )
     dockerfile_path = os.path.join(temp_folder, 'Dockerfile')
     os.makedirs(temp_folder, exist_ok=True)

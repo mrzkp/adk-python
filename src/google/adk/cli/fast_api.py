@@ -118,6 +118,7 @@ def get_fast_api_app(
     auto_create_session: bool = False,
     trigger_sources: list[Literal["pubsub", "eventarc"]] | None = None,
     gemini_enterprise_app_name: str | None = None,
+    express_mode: bool = False,
 ) -> FastAPI:
   """Constructs and returns a FastAPI application for serving ADK agents.
 
@@ -168,6 +169,9 @@ def get_fast_api_app(
       event-driven agent invocations. None disables all trigger endpoints.
     gemini_enterprise_app_name: The app_name to register with Gemini Enterprise
       via https://docs.cloud.google.com/gemini/enterprise/docs/register-and-manage-an-adk-agent
+    express_mode: Whether or not to intialize the server in express mode.
+      This is only supported when gemini_enterprise_app_name is set. Defaults to
+      False.
 
   Returns:
     The configured FastAPI application instance.
@@ -714,26 +718,30 @@ def get_fast_api_app(
 
     import inspect
     import json
-
+    import google.auth
     from google.adk.agents import Agent
     import vertexai
     from vertexai import agent_engines
 
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT", None)
-    location = os.environ.get(
-        "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION",
-        os.environ.get("GOOGLE_CLOUD_LOCATION", None),
-    )
-    api_key = os.environ.get("GOOGLE_API_KEY", None)
-    if project:
-      vertexai.init(project=project, location=location)
-    elif api_key:
+    if express_mode:
+      api_key = os.environ.get("GOOGLE_API_KEY", None)
+      if not api_key:
+        raise ValueError(
+            "No GOOGLE_API_KEY found in environment variables for express mode."
+        )
       vertexai.init(api_key=api_key)
     else:
-      raise ValueError(
-          "No GOOGLE_CLOUD_PROJECT or GOOGLE_API_KEY found in environment"
-          " variables."
+      _, project_id = google.auth.default()
+      location = os.environ.get(
+          "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION",
+          os.environ.get("GOOGLE_CLOUD_LOCATION", None),
       )
+      if not project_id or not location:
+        raise ValueError("No GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION found in"
+            " environment variables."
+        )
+      vertexai.init(project=project_id, location=location)
+
     # The tmp agent will be replaced by the adk server's runner and services.
     # It is specified here because it is a required argument to AdkApp.
     adk_app = agent_engines.AdkApp(agent=Agent(name="tmp"))
