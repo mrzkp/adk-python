@@ -78,6 +78,18 @@ def get_gcp_exporters(
   credentials, project_id = (
       google_auth if google_auth is not None else google.auth.default()
   )
+  if os.environ.get("GOOGLE_CLOUD_AGENT_ENGINE_ID"):
+    # Try to convert project number to project ID to associate logs with traces.
+    try:
+      from google.cloud import resourcemanager
+
+      projects_client = resourcemanager.ProjectsClient(credentials=credentials)
+      project = projects_client.get_project(name=f"projects/{project_id}")
+      project_id = project.project_id
+    except Exception:
+      logging.warning(
+          "Failed to convert project number to project ID.", exc_info=True
+      )
   if TYPE_CHECKING:
     credentials = cast(Credentials, credentials)
     project_id = cast(str, project_id)

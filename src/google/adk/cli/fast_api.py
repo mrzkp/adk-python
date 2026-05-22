@@ -731,13 +731,10 @@ def get_fast_api_app(
       adk_app._tmpl_attrs["location"] = None
       adk_app._tmpl_attrs["api_key"] = api_key
     else:
-      project_id = google.auth.default()
+      _, project_id = google.auth.default()
       location = os.environ.get(
           "GOOGLE_CLOUD_AGENT_ENGINE_LOCATION",
           os.environ.get("GOOGLE_CLOUD_LOCATION", None),
-      )
-      logging.warning(
-          "[fast_api] project_id: %s, location: %s", project_id, location
       )
       adk_app._tmpl_attrs["project"] = project_id
       adk_app._tmpl_attrs["location"] = location
