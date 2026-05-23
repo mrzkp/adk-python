@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WaitAll vs Speculative Join — Workflow Execution Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+    --bg: #efefef;
+    --card-bg: #ffffff;
+    --border: #c0c0c0;
+    --text: #222222;
+    --text-dim: #555555;
+    --blue: #0050d0;
+    --blue-light: #e8f0fe;
+    --gray: #999999;
+    --gray-light: #e0e0e0;
+    --fail: #cc0000;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    padding: 20px 28px;
+    min-height: 100vh;
+    font-size: 13px;
+}
+
+header {
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+h1 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.subtitle {
+    color: var(--text-dim);
+    font-size: 11px;
+}
+
+/* Control Bar */
+.simulator-panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.control-btn {
+    background: var(--blue);
+    border: 1px solid var(--blue);
+    color: white;
+    font-family: inherit;
+    font-weight: 600;
+    padding: 4px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+}
+.control-btn:hover {
+    background: #003da0;
+}
+.control-btn-sec {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+.control-btn-sec:hover {
+    background: var(--gray-light);
+}
+.slider-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.timeline-slider {
+    width: 100%;
+    -webkit-appearance: none;
+    background: var(--gray-light);
+    height: 4px;
+    outline: none;
+    cursor: pointer;
+}
+.timeline-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--blue);
+    border: 1px solid #003da0;
+}
+.time-clock {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 60px;
+    text-align: right;
+    color: var(--text);
+}
+
+/* Layout */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@media (max-width: 1000px) {
+    .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+.workflow-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    padding: 16px;
+}
+.workflow-card.standard { border-top: 2px solid var(--gray); }
+.workflow-card.blackboard { border-top: 2px solid var(--blue); }
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--gray-light);
+}
+.card-title {
+    font-size: 13px;
+    font-weight: 700;
+}
+.card-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border: 1px solid;
+}
+.badge-red { background: #fff0f0; color: var(--fail); border-color: #e0b0b0; }
+.badge-green { background: var(--blue-light); color: var(--blue); border-color: #b0c8f0; }
+
+/* State Machine */
+.state-machine-container {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0;
+    margin-bottom: 12px;
+}
+.flow-svg {
+    width: 100%;
+    height: auto;
+    max-height: 500px;
+}
+
+/* SVG Nodes */
+.node-box {
+    fill: #ffffff;
+    stroke: #a0a0a0;
+    stroke-width: 1px;
+    cursor: pointer;
+}
+.node-g:hover .node-box {
+    stroke: var(--blue);
+    stroke-width: 2px;
+}
+.node-text-title {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    fill: var(--text);
+    text-anchor: middle;
+    pointer-events: none;
+}
+.node-text-sub {
+    font-family: 'Inter', sans-serif;
+    font-size: 9px;
+    fill: var(--text-dim);
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+/* Edges */
+.edge-line {
+    stroke: #b0b0b0;
+    stroke-width: 1px;
+    fill: none;
+}
+@keyframes march {
+    to { stroke-dashoffset: -16; }
+}
+.active-edge {
+    stroke: var(--blue) !important;
+    stroke-width: 1.5px !important;
+    stroke-dasharray: 5, 3;
+    animation: march 0.8s linear infinite;
+}
+.completed-edge {
+    stroke: var(--blue) !important;
+    stroke-width: 1.5px !important;
+}
+.cancelled-edge {
+    stroke: var(--gray) !important;
+    stroke-width: 1px !important;
+    stroke-dasharray: 3, 3;
+}
+
+/* Node States */
+.node-g.pending .node-box { fill: #f5f5f5; stroke: #d0d0d0; }
+.node-g.pending text { opacity: 0.35; }
+
+.node-g.running .node-box {
+    fill: var(--blue-light);
+    stroke: var(--blue);
+    stroke-width: 2px;
+}
+
+.node-g.completed .node-box {
+    fill: var(--blue-light);
+    stroke: var(--blue);
+    stroke-width: 1.5px;
+}
+.node-g.completed .node-text-sub { fill: var(--blue); }
+
+.node-g.cancelled .node-box {
+    fill: #f5f5f5;
+    stroke: var(--gray);
+    stroke-width: 1px;
+    stroke-dasharray: 4, 2;
+}
+.node-g.cancelled text { opacity: 0.5; }
+
+/* Gantt Timelines */
+.gantt-section {
+    border-top: 1px solid var(--gray-light);
+    padding-top: 12px;
+}
+.gantt-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+    height: 22px;
+}
+.gantt-label {
+    width: 100px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 500;
+    text-align: right;
+    padding-right: 8px;
+    flex-shrink: 0;
+}
+.gantt-track {
+    flex: 1;
+    position: relative;
+    height: 18px;
+    background: #f0f0f0;
+    border: 1px solid var(--gray-light);
+    overflow: hidden;
+}
+.gantt-bar {
+    position: absolute;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding-left: 6px;
+    font-size: 9px;
+    color: white;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: width 0.05s linear, left 0.05s linear;
+    cursor: pointer;
+}
+.gantt-bar.agent { background: var(--blue); }
+.gantt-bar.cancelled { background: var(--gray); }
+.gantt-bar.evaluator { background: var(--blue); }
+.gantt-bar.synthesizer { background: #003da0; }
+.gantt-bar.workflow { background: var(--gray-light); border: 1px dashed var(--gray); color: var(--text-dim); }
+
+/* Metrics */
+.comparison-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    padding: 12px 16px;
+    margin-bottom: 16px;
+}
+.metrics-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+}
+@media (max-width: 768px) {
+    .metrics-row { grid-template-columns: 1fr 1fr; }
+}
+.metric-box {
+    background: #f5f5f5;
+    border: 1px solid var(--gray-light);
+    padding: 10px;
+    text-align: center;
+}
+.metric-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 2px;
+}
+.metric-value.green { color: var(--blue); }
+.metric-value.red { color: var(--text-dim); }
+.metric-desc {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+/* Console */
+.console-card {
+    background: #f5f5f5;
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    max-height: 200px;
+    overflow-y: auto;
+}
+.console-line {
+    margin-bottom: 2px;
+    display: flex;
+    gap: 12px;
+    line-height: 1.6;
+}
+.console-time { color: var(--blue); font-size: 10px; }
+.console-name { color: var(--text); font-weight: 500; }
+.console-status { color: var(--blue); }
+.console-status.cancelled { color: var(--fail); }
+
+/* Tooltip */
+.tooltip {
+    position: absolute;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: 11px;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 1000;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.08);
+    min-width: 200px;
+    max-width: 300px;
+}
+.tooltip.visible { opacity: 1; }
+.tooltip-title { color: var(--blue); font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.tooltip-row { color: var(--text-dim); margin-top: 2px; font-size: 10px; line-height: 1.5; }
+.tooltip-row strong { color: var(--text); font-weight: 600; }
+.tooltip-divider { border-top: 1px solid var(--gray-light); margin: 5px 0; }
+.tooltip-desc { color: var(--text-dim); font-size: 10px; font-style: italic; line-height: 1.4; }
+
+</style>
+</head>
+<body>
+
+<header>
+    <h1>WaitAll vs Speculative Join Visualizer</h1>
+    <div class="subtitle">Semantic early-exit vs traditional synchronization barrier comparison &middot; Wall time analysis</div>
+</header>
+
+<!-- Interactive Control Panel -->
+<div class="simulator-panel">
+    <button id="playBtn" class="control-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+        </svg>
+        <span>Play Simulation</span>
+    </button>
+    <button id="resetBtn" class="control-btn control-btn-sec">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <path d="M2.5 2v6h6M21.5 22v-6h-6"/>
+            <path d="M22 11.5A10 10 0 1 0 9.5 21.5"/>
+        </svg>
+        <span>Reset</span>
+    </button>
+    <div class="slider-container">
+        <input type="range" id="timeSlider" class="timeline-slider" min="0" max="22.87" step="0.05" value="0">
+    </div>
+    <div id="clock" class="time-clock">0.0s</div>
+</div>
+
+<!-- High-End Metrics Card -->
+<div class="comparison-card">
+    <div class="metrics-row">
+        <div class="metric-box">
+            <div class="metric-value red">22.9s</div>
+            <div class="metric-desc">Traditional WaitAll Time</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-value green">8.7s</div>
+            <div class="metric-desc">Speculative Early-Exit Time</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-value green">14.2s</div>
+            <div class="metric-desc">Total Execution Saved</div>
+        </div>
+        <div class="metric-box">
+            <div class="metric-value green">62%</div>
+            <div class="metric-desc">Wall-Clock Speedup</div>
+        </div>
+    </div>
+</div>
+
+<!-- Section: Workflow Comparison -->
+<div style="margin-bottom:8px;">
+    <h2 style="font-size:13px;font-weight:700;color:var(--text);">Workflow State Machines &amp; Gantt Timelines</h2>
+    <p style="font-size:10px;color:var(--text-dim);margin-top:1px;">Hover any node for details. Scrub the timeline to step through execution.</p>
+</div>
+<div class="dashboard-grid">
+    
+    <!-- LEFT PANEL: STANDARD PIPELINE -->
+    <div class="workflow-card standard">
+        <div class="card-header">
+            <h2 class="card-title">Traditional Workflow (WaitAll Join)</h2>
+            <span class="card-badge badge-red" id="std-workflow-status">stalled</span>
+        </div>
+        
+        <!-- Vertical Top-Down State Machine -->
+        <div class="state-machine-container">
+            <svg class="flow-svg" viewBox="0 0 400 520">
+                <defs>
+                    <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                        <path d="M0,0 L6,3 L0,6" fill="#b0b0b0"/>
+                    </marker>
+                    <marker id="arrow-blue" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                        <path d="M0,0 L6,3 L0,6" fill="var(--blue)"/>
+                    </marker>
+                </defs>
+                
+                <!-- Edges -->
+                <!-- START to news -->
+                <path id="std-edge-start-news" d="M 200,60 L 80,120" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- START to sentiment -->
+                <path id="std-edge-start-sentiment" d="M 200,65 L 200,120" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- START to filings -->
+                <path id="std-edge-start-filings" d="M 200,60 L 320,120" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- News to Join -->
+                <path id="std-edge-news-join" d="M 80,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Sentiment to Join -->
+                <path id="std-edge-sentiment-join" d="M 200,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Filings to Join -->
+                <path id="std-edge-filings-join" d="M 320,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- Join to Synthesizer -->
+                <path id="std-edge-join-synth" d="M 200,310 L 200,370" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Synthesizer to END -->
+                <path id="std-edge-synth-end" d="M 200,420 L 200,470" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- START Node -->
+                <g class="node-g completed">
+                    <circle cx="200" cy="40" r="16" fill="var(--blue-light)" stroke="var(--blue)" stroke-width="1.5"/>
+                    <text x="200" y="44" font-family="Inter" font-size="9" font-weight="600" fill="var(--blue)" text-anchor="middle">START</text>
+                </g>
+                
+                <!-- News Agent Node -->
+                <g id="std-node-agent_news" class="node-g">
+                    <rect x="30" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="80" y="142" class="node-text-title">News Agent</text>
+                    <text x="80" y="157" class="node-text-sub" id="std-time-agent_news">~2.0s</text>
+                </g>
+                
+                <!-- Sentiment Agent Node -->
+                <g id="std-node-agent_sentiment" class="node-g">
+                    <rect x="150" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="200" y="142" class="node-text-title">Sentiment Agent</text>
+                    <text x="200" y="157" class="node-text-sub" id="std-time-agent_sentiment">~3.0s</text>
+                </g>
+                
+                <!-- Filings Agent Node -->
+                <g id="std-node-agent_filings" class="node-g">
+                    <rect x="270" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="320" y="142" class="node-text-title">Filings Agent</text>
+                    <text x="320" y="157" class="node-text-sub" id="std-time-agent_filings">~20.0s (slow)</text>
+                </g>
+                
+                <!-- Traditional Join Barrier Node -->
+                <g id="std-node-standard_join" class="node-g">
+                    <rect x="130" y="250" width="140" height="60" rx="0" class="node-box"/>
+                    <text x="200" y="278" class="node-text-title">WaitAll JoinNode</text>
+                    <text x="200" y="293" class="node-text-sub">Blocks until N/N complete</text>
+                </g>
+                
+                <!-- Synthesizer Node -->
+                <g id="std-node-synthesizer" class="node-g">
+                    <rect x="140" y="370" width="120" height="50" rx="0" class="node-box"/>
+                    <text x="200" y="392" class="node-text-title">Synthesizer</text>
+                    <text x="200" y="407" class="node-text-sub" id="std-time-synthesizer">LLM Report</text>
+                </g>
+                
+                <!-- END Node -->
+                <g id="std-node-end" class="node-g">
+                    <circle cx="200" cy="485" r="14" fill="#f5f5f5" stroke="#a0a0a0" stroke-width="1" class="node-box"/>
+                    <text x="200" y="489" font-family="Inter" font-size="8" font-weight="600" fill="var(--text-dim)" text-anchor="middle">END</text>
+                </g>
+            </svg>
+        </div>
+        
+        <!-- Gantt chart timeline -->
+        <div class="gantt-section">
+            <div id="std-gantt"></div>
+        </div>
+    </div>
+    
+    <!-- RIGHT PANEL: BLACKBOARD PIPELINE -->
+    <div class="workflow-card blackboard">
+        <div class="card-header">
+            <h2 class="card-title">Speculative Workflow (Ours)</h2>
+            <span class="card-badge badge-green" id="bb-workflow-status">completed</span>
+        </div>
+        
+        <!-- Vertical Top-Down State Machine -->
+        <div class="state-machine-container">
+            <svg class="flow-svg" viewBox="0 0 400 520">
+                <!-- Edges -->
+                <!-- START to news -->
+                <path id="bb-edge-start-news" d="M 200,60 L 80,120" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- START to sentiment -->
+                <path id="bb-edge-start-sentiment" d="M 200,65 L 200,120" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- START to filings -->
+                <path id="bb-edge-start-filings" d="M 200,60 L 320,120" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- News to Join -->
+                <path id="bb-edge-news-join" d="M 80,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Sentiment to Join -->
+                <path id="bb-edge-sentiment-join" d="M 200,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Filings to Join -->
+                <path id="bb-edge-filings-join" d="M 320,170 L 200,250" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- Join to Synthesizer -->
+                <path id="bb-edge-join-synth" d="M 200,310 L 200,370" class="edge-line" marker-end="url(#arrow)"/>
+                <!-- Synthesizer to END -->
+                <path id="bb-edge-synth-end" d="M 200,420 L 200,470" class="edge-line" marker-end="url(#arrow)"/>
+                
+                <!-- START Node -->
+                <g class="node-g completed">
+                    <circle cx="200" cy="40" r="16" fill="var(--blue-light)" stroke="var(--blue)" stroke-width="1.5"/>
+                    <text x="200" y="44" font-family="Inter" font-size="9" font-weight="600" fill="var(--blue)" text-anchor="middle">START</text>
+                </g>
+                
+                <!-- News Agent Node -->
+                <g id="bb-node-agent_news" class="node-g">
+                    <rect x="30" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="80" y="142" class="node-text-title">News Agent</text>
+                    <text x="80" y="157" class="node-text-sub" id="bb-time-agent_news">~2.0s</text>
+                </g>
+                
+                <!-- Sentiment Agent Node -->
+                <g id="bb-node-agent_sentiment" class="node-g">
+                    <rect x="150" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="200" y="142" class="node-text-title">Sentiment Agent</text>
+                    <text x="200" y="157" class="node-text-sub" id="bb-time-agent_sentiment">~3.0s</text>
+                </g>
+                
+                <!-- Filings Agent Node -->
+                <g id="bb-node-agent_filings" class="node-g">
+                    <rect x="270" y="120" width="100" height="50" rx="0" class="node-box"/>
+                    <text x="320" y="142" class="node-text-title">Filings Agent</text>
+                    <text x="320" y="157" class="node-text-sub" id="bb-time-agent_filings">~20.0s</text>
+                </g>
+                
+                <!-- Speculative Join Node -->
+                <g id="bb-node-evaluator" class="node-g">
+                    <rect x="130" y="250" width="140" height="60" rx="0" class="node-box"/>
+                    <text x="200" y="272" class="node-text-title">SufficientJoin</text>
+                    <text x="200" y="285" class="node-text-sub" style="fill:var(--blue);font-weight:600;">LLM Evaluator</text>
+                    <text x="200" y="298" class="node-text-sub" id="bb-eval-state">Deciding...</text>
+                </g>
+                
+                <!-- Synthesizer Node -->
+                <g id="bb-node-synthesizer" class="node-g">
+                    <rect x="140" y="370" width="120" height="50" rx="0" class="node-box"/>
+                    <text x="200" y="392" class="node-text-title">Synthesizer</text>
+                    <text x="200" y="407" class="node-text-sub" id="bb-time-synthesizer">LLM Report</text>
+                </g>
+                
+                <!-- END Node -->
+                <g id="bb-node-end" class="node-g">
+                    <circle cx="200" cy="485" r="14" fill="#f5f5f5" stroke="#a0a0a0" stroke-width="1" class="node-box"/>
+                    <text x="200" y="489" font-family="Inter" font-size="8" font-weight="600" fill="var(--text-dim)" text-anchor="middle">END</text>
+                </g>
+            </svg>
+        </div>
+        
+        <!-- Gantt chart timeline -->
+        <div class="gantt-section">
+            <div id="bb-gantt"></div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Real-time Event Console Log -->
+<div class="workflow-card" style="margin-bottom:0;">
+    <h2 class="card-title" style="margin-bottom:8px;">Event Log</h2>
+    <div id="console" class="console-card"></div>
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<!-- JavaScript Engine for scrubber / simulator -->
+<script>
+const stdSpans = [{"name": "workflow", "start": 7.089984137564898e-07, "end": 22.865131583996117, "status": "completed", "category": "workflow", "label": "standard"}, {"name": "agent_news", "start": 0.0004909170093014836, "end": 2.001223375002155, "status": "completed", "category": "agent", "label": "agent_news"}, {"name": "agent_sentiment", "start": 0.0005317920004017651, "end": 3.0014667499926873, "status": "completed", "category": "agent", "label": "agent_sentiment"}, {"name": "agent_filings", "start": 0.0006123339990153909, "end": 20.00179629199556, "status": "completed", "category": "agent", "label": "agent_filings"}, {"name": "standard_join", "start": 20.00179629199556, "end": 20.101796291995562, "status": "completed", "category": "join", "label": "standard_join"}, {"name": "synthesizer", "start": 20.101796291995562, "end": 22.865130334015703, "status": "running", "category": "synthesizer", "label": "synthesizer"}];
+const bbSpans = [{"name": "workflow", "start": 1.1249794624745846e-06, "end": 8.67270958298468, "status": "completed", "category": "workflow", "label": "blackboard"}, {"name": "agent_news", "start": 0.0008625419868621975, "end": 2.0010607919830363, "status": "completed", "category": "agent", "label": "agent_news"}, {"name": "agent_sentiment", "start": 0.0009394169901497662, "end": 3.0021035419777036, "status": "completed", "category": "agent", "label": "agent_sentiment"}, {"name": "agent_filings", "start": 0.0009999169851653278, "end": 5.920533917000284, "status": "cancelled", "category": "agent", "label": "agent_filings"}, {"name": "evaluator", "start": 5.419407666980987, "end": 5.919407666980987, "status": "completed", "category": "evaluator", "label": "evaluator"}, {"name": "synthesizer", "start": 6.019407666980987, "end": 8.672705707984278, "status": "running", "category": "synthesizer", "label": "synthesizer"}];
+const stdEvents = [{"name": "workflow", "type": "start", "time": 7.089984137564898e-07, "category": "workflow", "label": "standard"}, {"name": "agent_news", "type": "start", "time": 0.0004909170093014836, "category": "agent"}, {"name": "agent_sentiment", "type": "start", "time": 0.0005317920004017651, "category": "agent"}, {"name": "agent_filings", "type": "start", "time": 0.0006123339990153909, "category": "agent"}, {"name": "agent_news", "type": "end", "time": 2.001223375002155, "category": "agent", "status": "completed"}, {"name": "agent_sentiment", "type": "end", "time": 3.0014667499926873, "category": "agent", "status": "completed"}, {"name": "agent_filings", "type": "end", "time": 20.00179629199556, "category": "agent", "status": "completed"}, {"name": "synthesizer", "type": "end", "time": 22.86288883400266, "category": "synthesizer", "status": "completed"}, {"name": "workflow", "type": "end", "time": 22.865131583996117, "category": "workflow"}, {"name": "standard_join", "type": "start", "time": 20.00179629199556, "category": "join"}, {"name": "standard_join", "type": "end", "time": 20.101796291995562, "category": "join", "status": "completed"}, {"name": "synthesizer", "type": "start", "time": 20.101796291995562, "category": "synthesizer"}];
+const bbEvents = [{"name": "workflow", "type": "start", "time": 1.1249794624745846e-06, "category": "workflow", "label": "blackboard"}, {"name": "agent_news", "type": "start", "time": 0.0008625419868621975, "category": "agent"}, {"name": "agent_sentiment", "type": "start", "time": 0.0009394169901497662, "category": "agent"}, {"name": "agent_filings", "type": "start", "time": 0.0009999169851653278, "category": "agent"}, {"name": "agent_news", "type": "end", "time": 2.0010607919830363, "category": "agent", "status": "completed"}, {"name": "agent_sentiment", "type": "end", "time": 3.0021035419777036, "category": "agent", "status": "completed"}, {"name": "evaluator", "type": "decision", "time": 5.919407666980987, "category": "evaluator", "sufficient": true}, {"name": "agent_filings", "type": "end", "time": 5.920533917000284, "category": "agent", "status": "cancelled"}, {"name": "synthesizer", "type": "end", "time": 8.669639207975706, "category": "synthesizer", "status": "completed"}, {"name": "workflow", "type": "end", "time": 8.67270958298468, "category": "workflow"}, {"name": "evaluator", "type": "start", "time": 5.419407666980987, "category": "evaluator"}, {"name": "evaluator", "type": "end", "time": 5.919407666980987, "category": "evaluator", "status": "completed"}, {"name": "synthesizer", "type": "start", "time": 6.019407666980987, "category": "synthesizer"}];
+
+const stdElapsed = 22.865130334015703;
+const bbElapsed = 8.672705707984278;
+const maxDuration = 22.865130334015703;
+
+// Node name mappings for state machines
+const stdNodeOrder = ['agent_news', 'agent_sentiment', 'agent_filings', 'standard_join', 'synthesizer', 'end'];
+const bbNodeOrder = ['agent_news', 'agent_sentiment', 'agent_filings', 'evaluator', 'synthesizer', 'end'];
+
+const labels = {
+    'workflow': 'Workflow',
+    'agent_news': 'News Agent',
+    'agent_sentiment': 'Sentiment Agent',
+    'agent_filings': 'Filings Agent',
+    'standard_join': 'WaitAll JoinNode',
+    'evaluator': 'SufficientJoinNode',
+    'synthesizer': 'Synthesizer',
+    'end': 'END Node'
+};
+
+// Rich descriptions for hover popovers on SVG nodes
+const nodeInfo = {
+    'agent_news': {
+        type: 'Research Agent',
+        desc: 'Scrapes breaking financial news from wire services and newsrooms. Returns headline summaries of relevant events.',
+        expected: '~2.0s',
+    },
+    'agent_sentiment': {
+        type: 'Research Agent',
+        desc: 'Analyzes social media sentiment (Twitter, Reddit) for the target company. Returns sentiment score and trending topics.',
+        expected: '~3.0s',
+    },
+    'agent_filings': {
+        type: 'Research Agent (SLOW)',
+        desc: 'Reads SEC 10-K filings for financial fundamentals. This is the intentional bottleneck — takes ~20s to simulate deep document analysis.',
+        expected: '~20.0s',
+    },
+    'standard_join': {
+        type: 'Synchronization Barrier',
+        desc: 'Traditional WaitAll join: blocks until ALL predecessors complete before releasing data downstream. Cannot proceed until the slowest agent finishes.',
+        expected: 'Blocked by slowest',
+    },
+    'evaluator': {
+        type: 'Semantic Gate (LLM)',
+        desc: 'SufficientJoinNode: after each predecessor completes, calls a lightweight LLM (gemini-2.5-flash) to evaluate whether the collected data is sufficient to answer the original question. If yes, fires immediately and cancels remaining agents.',
+        expected: '~0.5s per evaluation',
+    },
+    'synthesizer': {
+        type: 'LLM Synthesis Agent',
+        desc: 'Receives aggregated research data and produces a concise financial briefing (3-5 sentences). Uses the default model.',
+        expected: '~2-4s',
+    },
+    'end': {
+        type: 'Terminal Node',
+        desc: 'Workflow execution complete. All outputs committed to session.',
+        expected: '—',
+    },
+};
+
+const gLabels = {
+    'workflow': 'Workflow',
+    'agent_news': 'News Agent',
+    'agent_sentiment': 'Sentiment Agent',
+    'agent_filings': 'Filings Agent',
+    'standard_join': 'WaitAll Join',
+    'evaluator': 'SufficientJoin',
+    'synthesizer': 'Synthesizer',
+};
+
+// Build Gantt bars once
+function renderGantt(spans, parentId, isBB) {
+    const parent = document.getElementById(parentId);
+    parent.innerHTML = '';
+    
+    const displayOrder = isBB 
+        ? ['workflow', 'agent_news', 'agent_sentiment', 'agent_filings', 'evaluator', 'synthesizer']
+        : ['workflow', 'agent_news', 'agent_sentiment', 'agent_filings', 'standard_join', 'synthesizer'];
+        
+    displayOrder.forEach(name => {
+        const span = spans.find(s => s.name === name);
+        if (!span) return;
+        
+        const row = document.createElement('div');
+        row.className = 'gantt-row';
+        
+        const label = document.createElement('div');
+        label.className = 'gantt-label';
+        label.textContent = gLabels[name] || name;
+        row.appendChild(label);
+        
+        const track = document.createElement('div');
+        track.className = 'gantt-track';
+        
+        const bar = document.createElement('div');
+        bar.id = `${isBB ? 'bb' : 'std'}-bar-${name}`;
+        bar.className = 'gantt-bar';
+        
+        // Tooltip interaction
+        bar.addEventListener('mouseenter', (e) => {
+            const tooltip = document.getElementById('tooltip');
+            tooltip.innerHTML = `
+                <div class="tooltip-title">${labels[name] || name}</div>
+                <div class="tooltip-row">Start: ${span.start.toFixed(2)}s</div>
+                <div class="tooltip-row">End: ${span.end.toFixed(2)}s</div>
+                <div class="tooltip-row">Duration: ${(span.end - span.start).toFixed(2)}s</div>
+                <div class="tooltip-row">Status: ${span.status}</div>
+            `;
+            tooltip.style.left = (e.pageX + 10) + 'px';
+            tooltip.style.top = (e.pageY - 60) + 'px';
+            tooltip.classList.add('visible');
+        });
+        
+        bar.addEventListener('mouseleave', () => {
+            document.getElementById('tooltip').classList.remove('visible');
+        });
+        
+        track.appendChild(bar);
+        row.appendChild(track);
+        parent.appendChild(row);
+    });
+}
+
+renderGantt(stdSpans, 'std-gantt', false);
+renderGantt(bbSpans, 'bb-gantt', true);
+
+// Simulation State variables
+let currentTime = 0.0;
+let isPlaying = false;
+let simInterval = null;
+
+const timeSlider = document.getElementById('timeSlider');
+const clock = document.getElementById('clock');
+const playBtn = document.getElementById('playBtn');
+const resetBtn = document.getElementById('resetBtn');
+const consoleDiv = document.getElementById('console');
+
+function updateUI(timeVal) {
+    currentTime = parseFloat(timeVal);
+    timeSlider.value = currentTime;
+    clock.textContent = currentTime.toFixed(1) + 's';
+    
+    // Update Standard Pipeline Visual State
+    updateWorkflowState(stdSpans, 'std', stdElapsed, currentTime, stdNodeOrder);
+    // Update Blackboard Pipeline Visual State
+    updateWorkflowState(bbSpans, 'bb', bbElapsed, currentTime, bbNodeOrder);
+    
+    // Update Timeline Gantt sizes dynamically based on scrubber
+    updateGanttBars(stdSpans, 'std', stdElapsed, currentTime);
+    updateGanttBars(bbSpans, 'bb', bbElapsed, currentTime);
+    
+    // Update Event Console
+    updateConsoleLog(currentTime);
+}
+
+function updateWorkflowState(spans, prefix, elapsed, timeVal, nodeOrder) {
+    // 1. Workflow global status
+    const statusLabel = document.getElementById(`${prefix}-workflow-status`);
+    if (timeVal >= elapsed) {
+        statusLabel.textContent = prefix === 'std' ? 'completed (stalled)' : 'completed';
+        statusLabel.className = `card-badge badge-green`;
+    } else {
+        statusLabel.textContent = prefix === 'std' ? 'stalled / running' : 'running';
+        statusLabel.className = prefix === 'std' ? `card-badge badge-red` : `card-badge badge-green`;
+    }
+
+    // 2. Node states
+    nodeOrder.forEach(name => {
+        const nodeEl = document.getElementById(`${prefix}-node-${name}`);
+        if (!nodeEl) return;
+        
+        const span = spans.find(s => s.name === name);
+        
+        // END node mapping
+        if (name === 'end') {
+            if (timeVal >= elapsed) {
+                nodeEl.setAttribute('class', 'node-g completed');
+            } else {
+                nodeEl.setAttribute('class', 'node-g pending');
+            }
+            return;
+        }
+        
+        if (!span) return;
+        
+        if (timeVal < span.start) {
+            nodeEl.setAttribute('class', 'node-g pending');
+        } else if (timeVal >= span.start && timeVal < span.end) {
+            nodeEl.setAttribute('class', 'node-g running');
+            // update sub text dynamically
+            const sub = document.getElementById(`${prefix}-time-${name}`);
+            if (sub) sub.textContent = `Running... (${(timeVal - span.start).toFixed(1)}s)`;
+        } else {
+            // completed / cancelled
+            if (span.status === 'cancelled') {
+                nodeEl.setAttribute('class', 'node-g cancelled');
+                const sub = document.getElementById(`${prefix}-time-${name}`);
+                if (sub) sub.textContent = `Cancelled (${span.end.toFixed(1)}s)`;
+            } else {
+                nodeEl.setAttribute('class', 'node-g completed');
+                const sub = document.getElementById(`${prefix}-time-${name}`);
+                if (sub) sub.textContent = `Done (${(span.end - span.start).toFixed(1)}s)`;
+            }
+        }
+    });
+    
+    // Custom evaluator badge updates
+    if (prefix === 'bb') {
+        const evalState = document.getElementById('bb-eval-state');
+        const evalSpan = spans.find(s => s.name === 'evaluator');
+        if (timeVal < evalSpan.start) {
+            evalState.textContent = 'Waiting for inputs...';
+            evalState.style.fill = 'var(--text-dim)';
+        } else if (timeVal >= evalSpan.start && timeVal < evalSpan.end) {
+            evalState.textContent = 'Evaluating sufficiency...';
+            evalState.style.fill = 'var(--blue)';
+        } else {
+            evalState.textContent = 'sufficient=True';
+            evalState.style.fill = 'var(--blue)';
+        }
+    }
+
+    // 3. Edges states
+    updateEdges(prefix, timeVal, spans);
+}
+
+function updateEdges(prefix, timeVal, spans) {
+    const getSpan = (name) => spans.find(s => s.name === name) || { start: 9999, end: 9999 };
+    
+    const news = getSpan('agent_news');
+    const sentiment = getSpan('agent_sentiment');
+    const filings = getSpan('agent_filings');
+    const joinName = prefix === 'std' ? 'standard_join' : 'evaluator';
+    const join = getSpan(joinName);
+    const synth = getSpan('synthesizer');
+    
+    // Edges start -> agents
+    toggleEdge(`${prefix}-edge-start-news`, timeVal > 0, timeVal >= news.start, 'completed');
+    toggleEdge(`${prefix}-edge-start-sentiment`, timeVal > 0, timeVal >= sentiment.start, 'completed');
+    toggleEdge(`${prefix}-edge-start-filings`, timeVal > 0, timeVal >= filings.start, 'completed');
+    
+    // Edges agents -> join
+    toggleEdge(`${prefix}-edge-news-join`, timeVal >= news.end, timeVal >= join.start, 'completed');
+    toggleEdge(`${prefix}-edge-sentiment-join`, timeVal >= sentiment.end, timeVal >= join.start, 'completed');
+    
+    if (prefix === 'std') {
+        toggleEdge(`${prefix}-edge-filings-join`, timeVal >= filings.end, timeVal >= join.start, 'completed');
+    } else {
+        // Blackboard edge to join: green if completed, red dash if cancelled
+        if (filings.status === 'cancelled' && timeVal >= filings.end) {
+            toggleEdge(`${prefix}-edge-filings-join`, true, true, 'cancelled');
+        } else {
+            toggleEdge(`${prefix}-edge-filings-join`, timeVal >= filings.end, timeVal >= join.start, 'completed');
+        }
+    }
+    
+    // Join to Synth
+    toggleEdge(`${prefix}-edge-join-synth`, timeVal >= join.end, timeVal >= synth.start, 'completed');
+    // Synth to End
+    toggleEdge(`${prefix}-edge-synth-end`, timeVal >= synth.end, timeVal >= synth.end, 'completed');
+}
+
+function toggleEdge(edgeId, isRunning, isCompleted, type) {
+    const el = document.getElementById(edgeId);
+    if (!el) return;
+    
+    if (isCompleted) {
+        el.setAttribute('class', `edge-line ${type}-edge`);
+    } else if (isRunning) {
+        el.setAttribute('class', 'edge-line active-edge');
+    } else {
+        el.setAttribute('class', 'edge-line');
+    }
+}
+
+function updateGanttBars(spans, prefix, elapsed, timeVal) {
+    spans.forEach(span => {
+        const bar = document.getElementById(`${prefix}-bar-${span.name}`);
+        if (!bar) return;
+        
+        if (timeVal < span.start) {
+            bar.style.width = '0%';
+            bar.style.left = '0%';
+            bar.textContent = '';
+        } else {
+            const left = (span.start / maxDuration) * 100;
+            const currentEnd = Math.min(timeVal, span.end);
+            const width = ((currentEnd - span.start) / maxDuration) * 100;
+            
+            bar.style.left = left + '%';
+            bar.style.width = Math.max(0.5, width) + '%';
+            
+            let barClass = 'gantt-bar ';
+            if (span.status === 'cancelled') barClass += 'cancelled';
+            else if (span.category === 'evaluator') barClass += 'evaluator';
+            else if (span.category === 'synthesizer') barClass += 'synthesizer';
+            else if (span.category === 'workflow') barClass += 'workflow';
+            else barClass += 'agent';
+            bar.className = barClass;
+            
+            if (currentEnd > span.start + 0.3) {
+                bar.textContent = (currentEnd - span.start).toFixed(1) + 's';
+            } else {
+                bar.textContent = '';
+            }
+        }
+    });
+}
+
+function updateConsoleLog(timeVal) {
+    consoleDiv.innerHTML = '';
+    
+    const combinedEvents = [];
+    stdEvents.forEach(e => combinedEvents.push({ ...e, flow: 'Standard' }));
+    bbEvents.forEach(e => combinedEvents.push({ ...e, flow: 'Ours (BB)' }));
+    
+    combinedEvents.sort((a, b) => a.time - b.time);
+    
+    combinedEvents.forEach(ev => {
+        if (ev.time <= timeVal) {
+            const line = document.createElement('div');
+            line.className = 'console-line';
+            
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'console-time';
+            timeSpan.textContent = `[${ev.flow} - ${ev.time.toFixed(2)}s]`;
+            
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'console-name';
+            nameSpan.textContent = labels[ev.name] || ev.name;
+            
+            const actionSpan = document.createElement('span');
+            let isCancelled = ev.status === 'cancelled';
+            actionSpan.className = 'console-status' + (isCancelled ? ' cancelled' : '');
+            
+            let actionText = ev.type === 'start' ? 'started' : 'completed';
+            if (ev.status === 'cancelled') actionText = 'cancelled (early-exit)';
+            if (ev.type === 'decision') actionText = `evaluator decided: sufficient=${ev.sufficient}`;
+            actionSpan.textContent = actionText;
+            
+            line.appendChild(timeSpan);
+            line.appendChild(nameSpan);
+            line.appendChild(actionSpan);
+            consoleDiv.appendChild(line);
+        }
+    });
+    
+    // Auto scroll console to bottom
+    consoleDiv.scrollTop = consoleDiv.scrollHeight;
+}
+
+// Simulator Loop Controls
+function play() {
+    if (currentTime >= maxDuration) currentTime = 0;
+    isPlaying = true;
+    playBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+            <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+        </svg>
+        <span>Pause</span>
+    `;
+    
+    simInterval = setInterval(() => {
+        currentTime += 0.1;
+        if (currentTime >= maxDuration) {
+            currentTime = maxDuration;
+            pause();
+        }
+        updateUI(currentTime);
+    }, 50);
+}
+
+function pause() {
+    isPlaying = false;
+    clearInterval(simInterval);
+    playBtn.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+            <polygon points="5 3 19 12 5 21 5 3" fill="currentColor"/>
+        </svg>
+        <span>Play Simulation</span>
+    `;
+}
+
+playBtn.addEventListener('click', () => {
+    if (isPlaying) pause();
+    else play();
+});
+
+resetBtn.addEventListener('click', () => {
+    pause();
+    updateUI(0);
+});
+
+timeSlider.addEventListener('input', (e) => {
+    pause();
+    updateUI(e.target.value);
+});
+
+// ─── SVG Node Hover Tooltips ─────────────────────────────────────────────
+const tooltip = document.getElementById('tooltip');
+
+function getNodeStatus(prefix, name, timeVal) {
+    const spans = prefix === 'std' ? stdSpans : bbSpans;
+    const span = spans.find(s => s.name === name);
+    if (!span) return { status: 'pending', elapsed: 0 };
+    if (timeVal < span.start) return { status: 'pending', elapsed: 0 };
+    if (timeVal >= span.start && timeVal < span.end) return { status: 'running', elapsed: timeVal - span.start };
+    return { status: span.status || 'completed', elapsed: span.end - span.start };
+}
+
+function attachNodeHovers(prefix) {
+    const nodeNames = prefix === 'std' ? stdNodeOrder : bbNodeOrder;
+    nodeNames.forEach(name => {
+        const el = document.getElementById(`${prefix}-node-${name}`);
+        if (!el) return;
+        
+        el.addEventListener('mouseenter', (e) => {
+            const info = nodeInfo[name] || { type: 'Node', desc: '', expected: '—' };
+            const state = getNodeStatus(prefix, name, currentTime);
+            
+            const statusColors = {
+                'pending': '#999999',
+                'running': '#0050d0',
+                'completed': '#0050d0',
+                'cancelled': '#666666',
+                'decision': '#0050d0',
+            };
+            const statusColor = statusColors[state.status] || '#5a6370';
+            const statusLabel = state.status.charAt(0).toUpperCase() + state.status.slice(1);
+            
+            let html = `
+                <div class="tooltip-title">${labels[name] || name}</div>
+                <div class="tooltip-row"><strong>Type:</strong> ${info.type}</div>
+                <div class="tooltip-row"><strong>Status:</strong> <span style="color:${statusColor};font-weight:600">${statusLabel}</span></div>
+            `;
+            
+            if (state.status === 'running') {
+                html += `<div class="tooltip-row"><strong>Elapsed:</strong> ${state.elapsed.toFixed(1)}s</div>`;
+            } else if (state.status === 'completed' || state.status === 'cancelled') {
+                html += `<div class="tooltip-row"><strong>Duration:</strong> ${state.elapsed.toFixed(1)}s</div>`;
+            }
+            
+            html += `<div class="tooltip-row"><strong>Expected:</strong> ${info.expected}</div>`;
+            
+            if (info.desc) {
+                html += `<div class="tooltip-divider"></div><div class="tooltip-desc">${info.desc}</div>`;
+            }
+            
+            tooltip.innerHTML = html;
+            tooltip.style.left = (e.pageX + 14) + 'px';
+            tooltip.style.top = (e.pageY - 20) + 'px';
+            tooltip.classList.add('visible');
+        });
+        
+        el.addEventListener('mousemove', (e) => {
+            tooltip.style.left = (e.pageX + 14) + 'px';
+            tooltip.style.top = (e.pageY - 20) + 'px';
+        });
+        
+        el.addEventListener('mouseleave', () => {
+            tooltip.classList.remove('visible');
+        });
+    });
+}
+
+attachNodeHovers('std');
+attachNodeHovers('bb');
+
+// Initialize
+updateUI(0);
+play();
+
+</script>
+</body>
+</html>

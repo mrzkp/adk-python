@@ -21,6 +21,7 @@ from ._function_node import FunctionNode
 from ._graph import DEFAULT_ROUTE
 from ._graph import Edge
 from ._join_node import JoinNode
+from ._sufficient_join_node import SufficientJoinNode
 from ._node import Node
 from ._node import node
 from ._retry_config import RetryConfig
@@ -32,6 +33,7 @@ __all__ = [
     'Edge',
     'FunctionNode',
     'JoinNode',
+    'SufficientJoinNode',
     'Node',
     'NodeTimeoutError',
     'RetryConfig',

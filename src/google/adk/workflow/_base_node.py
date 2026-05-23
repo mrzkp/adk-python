@@ -250,6 +250,16 @@ class BaseNode(BaseModel):
     """If True, the node waits for all predecessors to complete before running."""
     return False
 
+  @property
+  def _requires_partial_predecessors(self) -> bool:
+    """If True, the node is triggered after each predecessor completion.
+
+    The node receives a partial dict of available outputs and decides
+    itself (via ``wait_for_output``) whether to yield output or stay
+    WAITING for more data.  Used by ``SufficientJoinNode``.
+    """
+    return False
+
 
 START = BaseNode(name='__START__')
 """Sentinel node marking the entry point of a workflow graph.

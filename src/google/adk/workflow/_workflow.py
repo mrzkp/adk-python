@@ -104,6 +104,12 @@ class _LoopState(DynamicNodeState):
   error_shut_down: bool = False
   """Flag indicating that the workflow is shutting down due to an error."""
 
+  sufficient_exit: bool = False
+  """Set by SufficientJoinNode to signal early exit once data is sufficient."""
+
+  cancelled_nodes: list[str] = field(default_factory=list)
+  """Names of predecessor nodes cancelled due to a sufficient early exit."""
+
   node_outputs: dict[str, Any] = field(default_factory=dict)
   """Cached static node outputs."""
 
@@ -384,6 +390,20 @@ class Workflow(BaseNode):
           return
 
         self._handle_completion(loop_state, name, node, child_ctx)
+
+        if loop_state.sufficient_exit:
+          for pending_name, pending_task in list(loop_state.pending_tasks.items()):
+            if not pending_task.done():
+              pending_task.cancel()
+              loop_state.cancelled_nodes.append(pending_name)
+              loop_state.nodes[pending_name].status = NodeStatus.CANCELLED
+          loop_state.pending_tasks.clear()
+          logger.debug(
+              'node %s sufficient early exit: cancelled %d pending nodes.',
+              ctx.node_path,
+              len(loop_state.cancelled_nodes),
+          )
+          break
 
     # Await fire-and-forget dynamic tasks.
     # TODO: Handle dynamic task failures and interrupts here.
@@ -666,6 +686,9 @@ class Workflow(BaseNode):
         child_ctx._invocation_context.branch or ''
     )
 
+    if child_ctx.state.get('_sufficient_exit'):
+      loop_state.sufficient_exit = True
+
     # Buffer downstream triggers.
     self._buffer_downstream_triggers(
         loop_state,
@@ -714,6 +737,35 @@ class Workflow(BaseNode):
           loop_state.trigger_buffer.setdefault(target_name, []).append(
               Trigger(
                   input=outputs,
+                  use_sub_branch=False,
+                  branch=common_branch,
+              )
+          )
+      elif target_node._requires_partial_predecessors:
+        # Trigger after every predecessor completion with whatever is available.
+        # The node uses wait_for_output=True to stay WAITING until it decides
+        # to yield (i.e. when the data is semantically sufficient).
+        predecessors = {
+            e.from_node.name
+            for e in self.graph.edges
+            if e.to_node.name == target_name
+        }
+        completed = {
+            p
+            for p in predecessors
+            if loop_state.nodes.get(p)
+            and loop_state.nodes[p].status == NodeStatus.COMPLETED
+        }
+        if completed:
+          partial_outputs = {
+              p: loop_state.node_outputs.get(p) for p in completed
+          }
+          branches = [loop_state.node_branches.get(p, '') for p in completed]
+          common_branch = get_common_branch_prefix(branches)
+
+          loop_state.trigger_buffer.setdefault(target_name, []).append(
+              Trigger(
+                  input=partial_outputs,
                   use_sub_branch=False,
                   branch=common_branch,
               )

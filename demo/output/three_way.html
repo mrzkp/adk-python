@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Three-Way Workflow Comparison Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f4f5f7; --card: #fff; --border: #d1d5db; --text: #1f2937;
+  --dim: #6b7280; --blue: #2563eb; --blue-lt: #dbeafe; --green: #059669;
+  --green-lt: #d1fae5; --red: #dc2626; --red-lt: #fee2e2; --purple: #7c3aed;
+  --purple-lt: #ede9fe; --orange: #d97706; --orange-lt: #fef3c7;
+  --gray: #9ca3af; --gray-lt: #e5e7eb;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--text); padding:20px 24px; font-size:13px; }
+h1 { font-size:18px; font-weight:700; margin-bottom:2px; }
+.sub { font-size:11px; color:var(--dim); margin-bottom:16px; }
+
+/* Controls */
+.controls { background:var(--card); border:1px solid var(--border); padding:8px 14px;
+  display:flex; align-items:center; gap:10px; margin-bottom:16px; border-radius:6px; }
+.btn { border:1px solid var(--border); padding:5px 12px; cursor:pointer;
+  font-family:inherit; font-size:11px; font-weight:600; border-radius:4px;
+  display:inline-flex; align-items:center; gap:5px; }
+.btn-play { background:var(--blue); color:#fff; border-color:var(--blue); }
+.btn-play:hover { background:#1d4ed8; }
+.btn-sec { background:var(--card); color:var(--text); }
+.btn-sec:hover { background:var(--gray-lt); }
+.slider-wrap { flex:1; display:flex; align-items:center; gap:8px; }
+.slider { width:100%; -webkit-appearance:none; background:var(--gray-lt); height:4px;
+  outline:none; cursor:pointer; border-radius:2px; }
+.slider::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px;
+  background:var(--blue); border-radius:50%; cursor:pointer; }
+.clock { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:600;
+  min-width:55px; text-align:right; }
+
+/* Metrics */
+.metrics { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:16px; }
+.metric { background:var(--card); border:1px solid var(--border); border-radius:6px;
+  padding:12px; text-align:center; }
+.metric .val { font-size:20px; font-weight:700; margin-bottom:2px; }
+.metric .desc { font-size:10px; color:var(--dim); }
+.val-blue { color:var(--blue); } .val-green { color:var(--green); }
+.val-red { color:var(--red); } .val-purple { color:var(--purple); }
+
+/* Three columns */
+.panels { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-bottom:16px; }
+@media (max-width:1100px) { .panels { grid-template-columns:1fr; } }
+.panel { background:var(--card); border:1px solid var(--border); border-radius:6px;
+  padding:16px; overflow:hidden; }
+.panel.std { border-top:3px solid var(--gray); }
+.panel.opt { border-top:3px solid var(--blue); }
+.panel.pes { border-top:3px solid var(--purple); }
+.panel-head { display:flex; justify-content:space-between; align-items:center;
+  margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--gray-lt); }
+.panel-title { font-size:13px; font-weight:700; }
+.badge { font-size:9px; font-weight:600; padding:2px 7px; border-radius:3px;
+  text-transform:uppercase; letter-spacing:.3px; }
+.badge-gray { background:#f3f4f6; color:var(--dim); border:1px solid var(--gray-lt); }
+.badge-blue { background:var(--blue-lt); color:var(--blue); border:1px solid #93c5fd; }
+.badge-purple { background:var(--purple-lt); color:var(--purple); border:1px solid #c4b5fd; }
+
+/* Gantt */
+.gantt-row { display:flex; align-items:center; margin-bottom:3px; height:22px; }
+.gantt-lbl { width:90px; font-size:10px; color:var(--dim); font-weight:500;
+  text-align:right; padding-right:8px; flex-shrink:0; white-space:nowrap; overflow:hidden; }
+.gantt-track { flex:1; position:relative; height:18px; background:#f9fafb;
+  border:1px solid var(--gray-lt); border-radius:2px; overflow:hidden; }
+.gantt-bar { position:absolute; height:100%; display:flex; align-items:center;
+  padding-left:5px; font-size:8px; color:#fff; font-weight:500; white-space:nowrap;
+  border-radius:1px; transition:width .05s linear, left .05s linear; }
+.bar-agent { background:var(--blue); }
+.bar-cancelled { background:var(--gray); opacity:.6; }
+.bar-evaluator { background:var(--orange); }
+.bar-reconciler { background:var(--purple); }
+.bar-synthesizer { background:#1e40af; }
+.bar-join { background:var(--gray); }
+.bar-workflow { background:var(--gray-lt); border:1px dashed var(--gray); color:var(--dim); }
+
+/* Phase markers */
+.phase-marker { position:absolute; top:0; height:100%; border-left:2px dashed;
+  z-index:2; pointer-events:none; }
+.phase-marker .phase-label { position:absolute; top:-14px; left:2px;
+  font-size:8px; font-weight:600; white-space:nowrap; }
+
+/* Console */
+.console-card { background:var(--card); border:1px solid var(--border); border-radius:6px;
+  padding:12px; }
+.console { background:#f9fafb; border:1px solid var(--gray-lt); border-radius:4px;
+  padding:8px 10px; font-family:'JetBrains Mono',monospace; font-size:10px;
+  color:var(--dim); max-height:200px; overflow-y:auto; }
+.console-line { display:flex; gap:10px; line-height:1.7; }
+.c-time { color:var(--blue); font-size:9px; min-width:100px; }
+.c-name { color:var(--text); font-weight:500; min-width:100px; }
+.c-status { color:var(--blue); }
+.c-status.cancelled { color:var(--red); }
+.c-status.reconciler { color:var(--purple); }
+
+/* Tooltip */
+.tooltip { position:fixed; background:#fff; border:1px solid var(--border);
+  border-radius:6px; padding:10px 12px; font-size:11px; pointer-events:none;
+  opacity:0; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,.1);
+  max-width:280px; transition:opacity .15s; }
+.tooltip.vis { opacity:1; }
+.tt-title { font-weight:700; color:var(--blue); margin-bottom:3px; }
+.tt-row { color:var(--dim); font-size:10px; line-height:1.5; }
+.tt-row strong { color:var(--text); }
+</style>
+</head>
+<body>
+
+<h1>Three-Way Workflow Comparison</h1>
+<p class="sub">Standard (WaitAll) vs Optimistic (Cancel Stragglers) vs Pessimistic (Speculate + Reconcile) &middot; Interactive timeline</p>
+
+<div class="controls">
+  <button id="playBtn" class="btn btn-play">&#9654; Play</button>
+  <button id="resetBtn" class="btn btn-sec">&#8635; Reset</button>
+  <div class="slider-wrap">
+    <input type="range" id="slider" class="slider" min="0" max="20.29" step="0.05" value="0">
+  </div>
+  <div id="clock" class="clock">0.0s</div>
+</div>
+
+<div class="metrics">
+  <div class="metric"><div class="val val-red">19.6s</div><div class="desc">Standard Time</div></div>
+  <div class="metric"><div class="val val-blue">8.0s</div><div class="desc">Optimistic Time</div></div>
+  <div class="metric"><div class="val val-purple">20.3s</div><div class="desc">Pessimistic Time</div></div>
+  <div class="metric"><div class="val val-green">9.9s</div><div class="desc">Pessimistic 1st Report</div></div>
+  <div class="metric"><div class="val val-blue">59%</div><div class="desc">Optimistic Speedup</div></div>
+  <div class="metric"><div class="val val-purple">MERGE</div><div class="desc">Reconciliation</div></div>
+</div>
+
+<div class="panels">
+
+  <!-- STANDARD -->
+  <div class="panel std">
+    <div class="panel-head">
+      <span class="panel-title">Standard (WaitAll)</span>
+      <span class="badge badge-gray" id="std-status">waiting</span>
+    </div>
+    <div id="std-gantt"></div>
+  </div>
+
+  <!-- OPTIMISTIC -->
+  <div class="panel opt">
+    <div class="panel-head">
+      <span class="panel-title">Optimistic (Cancel)</span>
+      <span class="badge badge-blue" id="opt-status">waiting</span>
+    </div>
+    <div id="opt-gantt"></div>
+  </div>
+
+  <!-- PESSIMISTIC -->
+  <div class="panel pes">
+    <div class="panel-head">
+      <span class="panel-title">Pessimistic (Reconcile)</span>
+      <span class="badge badge-purple" id="pes-status">waiting</span>
+    </div>
+    <div id="pes-gantt"></div>
+  </div>
+
+</div>
+
+<div class="console-card">
+  <div style="font-weight:700;margin-bottom:6px;">Event Log</div>
+  <div id="console" class="console"></div>
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script>
+const DATA = {
+  std: { spans: [{"name": "workflow", "start": 7.500057108700275e-07, "end": 19.647457499988377, "status": "completed", "category": "workflow"}, {"name": "news", "start": 0.0005809160065837204, "end": 2.000977540999884, "status": "completed", "category": "agent"}, {"name": "sentiment", "start": 0.0006218749913387001, "end": 3.0017154999950435, "status": "completed", "category": "agent"}, {"name": "filings", "start": 0.0006559159955941141, "end": 15.000964000006206, "status": "completed", "category": "agent"}, {"name": "join", "start": 15.000964000006206, "end": 15.100964000006206, "status": "completed", "category": "join"}, {"name": "synthesizer", "start": 15.200964000006206, "end": 19.54745654098806, "status": "completed", "category": "synthesizer"}], elapsed: 19.6475, events: [{"name": "workflow", "type": "start", "time": 7.500057108700275e-07, "category": "workflow", "label": "Standard"}, {"name": "s_news", "type": "start", "time": 0.0005809160065837204, "category": "agent"}, {"name": "s_sentiment", "type": "start", "time": 0.0006218749913387001, "category": "agent"}, {"name": "s_filings", "type": "start", "time": 0.0006559159955941141, "category": "agent"}, {"name": "s_news", "type": "end", "time": 2.000977540999884, "category": "agent", "status": "completed"}, {"name": "s_sentiment", "type": "end", "time": 3.0017154999950435, "category": "agent", "status": "completed"}, {"name": "s_filings", "type": "end", "time": 15.000964000006206, "category": "agent", "status": "completed"}, {"name": "synthesizer", "type": "output", "time": 19.646488208003575, "category": "synthesizer", "time_at": 19.646487165999133}, {"name": "workflow", "type": "end", "time": 19.647457499988377, "category": "workflow"}] },
+  opt: { spans: [{"name": "workflow", "start": 7.500057108700275e-07, "end": 8.048180583980866, "status": "completed", "category": "workflow"}, {"name": "news", "start": 0.0006155419978313148, "end": 2.0017154999950435, "status": "completed", "category": "agent"}, {"name": "sentiment", "start": 0.000663458980852738, "end": 3.0016389999946114, "status": "completed", "category": "agent"}, {"name": "filings", "start": 0.0007057499897200614, "end": 5.232017000002088, "status": "cancelled", "category": "agent"}, {"name": "evaluator", "start": 4.730791584006511, "end": 5.230791584006511, "status": "decision", "category": "evaluator", "label": "sufficient=True"}, {"name": "synthesizer", "start": 5.33079158400651, "end": 8.04720666698995, "status": "completed", "category": "synthesizer"}], elapsed: 8.0482, events: [{"name": "workflow", "type": "start", "time": 7.500057108700275e-07, "category": "workflow", "label": "Optimistic"}, {"name": "o_news", "type": "start", "time": 0.0006155419978313148, "category": "agent"}, {"name": "o_sentiment", "type": "start", "time": 0.000663458980852738, "category": "agent"}, {"name": "o_filings", "type": "start", "time": 0.0007057499897200614, "category": "agent"}, {"name": "o_news", "type": "end", "time": 2.0017154999950435, "category": "agent", "status": "completed"}, {"name": "o_sentiment", "type": "end", "time": 3.0016389999946114, "category": "agent", "status": "completed"}, {"name": "evaluator", "type": "decision", "time": 5.230791584006511, "category": "evaluator", "sufficient": true}, {"name": "o_filings", "type": "end", "time": 5.232017000002088, "category": "agent", "status": "cancelled"}, {"name": "synthesizer", "type": "output", "time": 8.04720666698995, "category": "synthesizer", "time_at": 8.047205499984557}, {"name": "workflow", "type": "end", "time": 8.048180583980866, "category": "workflow"}] },
+  pes: { spans: [{"name": "workflow", "start": 5.839974619448185e-07, "end": 20.294741125020664, "status": "completed", "category": "workflow"}, {"name": "news", "start": 0.0012595420121215284, "end": 2.002354333992116, "status": "completed", "category": "agent"}, {"name": "sentiment", "start": 0.001302709017181769, "end": 3.001798167009838, "status": "completed", "category": "agent"}, {"name": "filings", "start": 0.0013382920005824417, "end": 15.002458250004565, "status": "completed", "category": "agent"}, {"name": "evaluator", "start": 6.208962584001711, "end": 6.708962584001711, "status": "decision", "category": "evaluator", "label": "sufficient=True"}, {"name": "reconciler", "start": 16.854717334004818, "end": 17.354717334004818, "status": "decision", "category": "reconciler", "label": "action=merge"}, {"name": "synthesizer", "start": 6.80896258400171, "end": 9.899713334016269, "status": "completed", "category": "synthesizer"}, {"name": "synthesizer_v2", "start": 17.45471733400482, "end": 20.293553291994613, "status": "completed", "category": "synthesizer"}], elapsed: 20.2947, events: [{"name": "workflow", "type": "start", "time": 5.839974619448185e-07, "category": "workflow", "label": "Pessimistic"}, {"name": "p_news", "type": "start", "time": 0.0012595420121215284, "category": "agent"}, {"name": "p_sentiment", "type": "start", "time": 0.001302709017181769, "category": "agent"}, {"name": "p_filings", "type": "start", "time": 0.0013382920005824417, "category": "agent"}, {"name": "p_news", "type": "end", "time": 2.002354333992116, "category": "agent", "status": "completed"}, {"name": "p_sentiment", "type": "end", "time": 3.001798167009838, "category": "agent", "status": "completed"}, {"name": "evaluator", "type": "decision", "time": 6.708962584001711, "category": "evaluator", "sufficient": true}, {"name": "synthesizer", "type": "output", "time": 9.899713334016269, "category": "synthesizer", "time_at": 9.899712125014048}, {"name": "p_filings", "type": "end", "time": 15.002458250004565, "category": "agent", "status": "completed"}, {"name": "reconciler", "type": "decision", "time": 17.354717334004818, "category": "reconciler", "action": "merge", "severity": "high"}, {"name": "synthesizer", "type": "output", "time": 20.293553291994613, "category": "synthesizer", "time_at": 20.293552250019275}, {"name": "workflow", "type": "end", "time": 20.294741125020664, "category": "workflow"}] },
+};
+const maxDur = 20.2947;
+
+const DISPLAY_ORDER = {
+  std: ['news','sentiment','filings','join','synthesizer'],
+  opt: ['news','sentiment','filings','evaluator','synthesizer'],
+  pes: ['news','sentiment','filings','evaluator','synthesizer','reconciler','synthesizer_v2'],
+};
+
+const LABELS = {
+  news:'News Agent', sentiment:'Sentiment', filings:'Filings (slow)',
+  join:'WaitAll Join', evaluator:'Evaluator', synthesizer:'Synthesizer',
+  reconciler:'Reconciler', synthesizer_v2:'Synth v2', evaluator2:'Eval v2',
+  workflow:'Workflow',
+};
+
+const BAR_CLASS = {
+  agent:'bar-agent', evaluator:'bar-evaluator', reconciler:'bar-reconciler',
+  synthesizer:'bar-synthesizer', join:'bar-join', workflow:'bar-workflow',
+};
+
+// Build Gantt rows
+function renderGantt(key) {
+  const el = document.getElementById(key+'-gantt');
+  el.innerHTML = '';
+  const order = DISPLAY_ORDER[key] || [];
+  order.forEach(name => {
+    const span = DATA[key].spans.find(s => s.name === name);
+    if (!span) return;
+    const row = document.createElement('div');
+    row.className = 'gantt-row';
+    const lbl = document.createElement('div');
+    lbl.className = 'gantt-lbl';
+    lbl.textContent = LABELS[name] || name;
+    row.appendChild(lbl);
+    const track = document.createElement('div');
+    track.className = 'gantt-track';
+    const bar = document.createElement('div');
+    bar.id = key+'-bar-'+name;
+    bar.className = 'gantt-bar';
+
+    // Tooltip
+    bar.addEventListener('mouseenter', (e) => {
+      const tt = document.getElementById('tooltip');
+      tt.innerHTML = '<div class="tt-title">'+(LABELS[name]||name)+'</div>'
+        +'<div class="tt-row"><strong>Start:</strong> '+span.start.toFixed(2)+'s</div>'
+        +'<div class="tt-row"><strong>End:</strong> '+span.end.toFixed(2)+'s</div>'
+        +'<div class="tt-row"><strong>Duration:</strong> '+(span.end-span.start).toFixed(2)+'s</div>'
+        +'<div class="tt-row"><strong>Status:</strong> '+span.status+'</div>';
+      tt.style.left=(e.clientX+12)+'px'; tt.style.top=(e.clientY-40)+'px';
+      tt.classList.add('vis');
+    });
+    bar.addEventListener('mouseleave', ()=>document.getElementById('tooltip').classList.remove('vis'));
+    bar.addEventListener('mousemove', (e)=>{
+      const tt=document.getElementById('tooltip');
+      tt.style.left=(e.clientX+12)+'px'; tt.style.top=(e.clientY-40)+'px';
+    });
+
+    track.appendChild(bar);
+    row.appendChild(track);
+    el.appendChild(row);
+  });
+}
+renderGantt('std'); renderGantt('opt'); renderGantt('pes');
+
+// State
+let curTime=0, playing=false, interval=null;
+const slider=document.getElementById('slider');
+const clock=document.getElementById('clock');
+const playBtn=document.getElementById('playBtn');
+const resetBtn=document.getElementById('resetBtn');
+const consoleDv=document.getElementById('console');
+
+function updateUI(t) {
+  curTime=parseFloat(t);
+  slider.value=curTime;
+  clock.textContent=curTime.toFixed(1)+'s';
+  ['std','opt','pes'].forEach(key => {
+    updateGantt(key,curTime);
+    updateStatus(key,curTime);
+  });
+  updateConsole(curTime);
+}
+
+function updateGantt(key,t) {
+  DATA[key].spans.forEach(span => {
+    const bar=document.getElementById(key+'-bar-'+span.name);
+    if(!bar) return;
+    if(t < span.start) {
+      bar.style.width='0%'; bar.style.left='0%'; bar.textContent='';
+      return;
+    }
+    const left=(span.start/maxDur)*100;
+    const curEnd=Math.min(t,span.end);
+    const width=((curEnd-span.start)/maxDur)*100;
+    bar.style.left=left+'%';
+    bar.style.width=Math.max(0.4,width)+'%';
+
+    let cls='gantt-bar ';
+    if(span.status==='cancelled') cls+='bar-cancelled';
+    else cls += (BAR_CLASS[span.category]||'bar-agent');
+    bar.className=cls;
+
+    const dur=curEnd-span.start;
+    bar.textContent = dur>0.5 ? dur.toFixed(1)+'s' : '';
+  });
+}
+
+function updateStatus(key,t) {
+  const el=document.getElementById(key+'-status');
+  const elapsed=DATA[key].elapsed;
+  if(t>=elapsed) {
+    el.textContent='completed';
+  } else if(t>0) {
+    el.textContent='running';
+  } else {
+    el.textContent='waiting';
+  }
+}
+
+function updateConsole(t) {
+  consoleDv.innerHTML='';
+  const all=[];
+  ['std','opt','pes'].forEach(key => {
+    DATA[key].events.forEach(e => all.push({...e, flow:key}));
+  });
+  all.sort((a,b)=>a.time-b.time);
+
+  const flowLabels = { std:'STD', opt:'OPT', pes:'PES' };
+  const flowColors = { std:'var(--gray)', opt:'var(--blue)', pes:'var(--purple)' };
+
+  all.forEach(ev => {
+    if(ev.time>t) return;
+    const line=document.createElement('div');
+    line.className='console-line';
+
+    const ts=document.createElement('span');
+    ts.className='c-time';
+    ts.style.color=flowColors[ev.flow];
+    ts.textContent='['+flowLabels[ev.flow]+' '+ev.time.toFixed(2)+'s]';
+
+    const nm=document.createElement('span');
+    nm.className='c-name';
+    nm.textContent=LABELS[ev.name]||ev.name;
+
+    const st=document.createElement('span');
+    let action=ev.type==='start'?'started':ev.type==='end'?(ev.status||'completed'):ev.type;
+    if(ev.type==='decision' && ev.category==='evaluator') action='sufficient='+ev.sufficient;
+    if(ev.type==='decision' && ev.category==='reconciler') action='action='+ev.action+' ('+ev.severity+')';
+    if(ev.status==='cancelled') { st.className='c-status cancelled'; action='CANCELLED'; }
+    else if(ev.category==='reconciler') { st.className='c-status reconciler'; }
+    else { st.className='c-status'; }
+    st.textContent=action;
+
+    line.appendChild(ts); line.appendChild(nm); line.appendChild(st);
+    consoleDv.appendChild(line);
+  });
+  consoleDv.scrollTop=consoleDv.scrollHeight;
+}
+
+function play() {
+  if(curTime>=maxDur) curTime=0;
+  playing=true;
+  playBtn.innerHTML='&#9646;&#9646; Pause';
+  interval=setInterval(()=>{
+    curTime+=0.1;
+    if(curTime>=maxDur){ curTime=maxDur; pause(); }
+    updateUI(curTime);
+  },50);
+}
+function pause() {
+  playing=false; clearInterval(interval);
+  playBtn.innerHTML='&#9654; Play';
+}
+playBtn.addEventListener('click',()=>playing?pause():play());
+resetBtn.addEventListener('click',()=>{ pause(); updateUI(0); });
+slider.addEventListener('input',(e)=>{ pause(); updateUI(e.target.value); });
+
+updateUI(0);
+play();
+</script>
+</body>
+</html>

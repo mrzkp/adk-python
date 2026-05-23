@@ -1,0 +1,772 @@
+"""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  VISUALIZER: Multi-Layer Pipeline — Three Strategies Compared               ║
+║                                                                              ║
+║  Simulates a two-stage research pipeline with different evaluators:          ║
+║                                                                              ║
+║  Layer 1 (Research):                                                         ║
+║    • agent_news (2s) + agent_sentiment (3s) + agent_filings (15s)           ║
+║    → SufficientJoin L1                                                      ║
+║                                                                              ║
+║  Layer 2 (Analysis):                                                         ║
+║    • agent_risk (3s) + agent_valuation (10s)                                ║
+║    → SufficientJoin L2                                                      ║
+║                                                                              ║
+║  Layer 3 (Synthesis):                                                        ║
+║    • synthesizer (3s)                                                        ║
+║                                                                              ║
+║  Three modes compared:                                                       ║
+║    Pessimistic        — WaitAll at both layers                                ║
+║    Blind Optimism     — Cancel stragglers at both layers                      ║
+║    Pessimistic Optimism — Speculate + reconcile at L1, optimistic at L2    ║
+║                                                                              ║
+║  Uses simulated events for instant, deterministic visualization.            ║
+║  No LLM calls. No network. Runs in <1s.                                     ║
+║                                                                              ║
+║  Usage: uv run python demo/multilayer_pipeline.py                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+
+from __future__ import annotations
+
+import json
+import webbrowser
+from pathlib import Path
+
+# ─── Simulated Timelines ──────────────────────────────────────────────────────
+# All events are generated deterministically — no LLM calls, no ADK runtime.
+# This shows exactly how the three strategies differ in behavior.
+
+
+def simulate_standard() -> list[dict]:
+    """Standard (WaitAll): waits for ALL agents at every layer."""
+    return [
+        # L1 research agents
+        {'name': 'news', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'sentiment', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'filings', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'news', 'type': 'end', 'time': 2.0, 'category': 'L1', 'layer': 1, 'status': 'completed'},
+        {'name': 'sentiment', 'type': 'end', 'time': 3.0, 'category': 'L1', 'layer': 1, 'status': 'completed'},
+        {'name': 'filings', 'type': 'end', 'time': 15.0, 'category': 'L1', 'layer': 1, 'status': 'completed'},
+        # L1 join (WaitAll — instant after all finish)
+        {'name': 'join_L1', 'type': 'start', 'time': 15.0, 'category': 'join', 'layer': 1},
+        {'name': 'join_L1', 'type': 'end', 'time': 15.1, 'category': 'join', 'layer': 1, 'status': 'completed'},
+        # L2 analysis agents
+        {'name': 'risk', 'type': 'start', 'time': 15.2, 'category': 'L2', 'layer': 2},
+        {'name': 'valuation', 'type': 'start', 'time': 15.2, 'category': 'L2', 'layer': 2},
+        {'name': 'risk', 'type': 'end', 'time': 18.2, 'category': 'L2', 'layer': 2, 'status': 'completed'},
+        {'name': 'valuation', 'type': 'end', 'time': 25.2, 'category': 'L2', 'layer': 2, 'status': 'completed'},
+        # L2 join
+        {'name': 'join_L2', 'type': 'start', 'time': 25.2, 'category': 'join', 'layer': 2},
+        {'name': 'join_L2', 'type': 'end', 'time': 25.3, 'category': 'join', 'layer': 2, 'status': 'completed'},
+        # Synthesizer
+        {'name': 'synthesizer', 'type': 'start', 'time': 25.4, 'category': 'synth', 'layer': 3},
+        {'name': 'synthesizer', 'type': 'end', 'time': 28.4, 'category': 'synth', 'layer': 3, 'status': 'completed'},
+    ]
+
+
+def simulate_optimistic() -> list[dict]:
+    """Optimistic: cancel stragglers at both layers when sufficient."""
+    return [
+        # L1 research agents
+        {'name': 'news', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'sentiment', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'filings', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1},
+        {'name': 'news', 'type': 'end', 'time': 2.0, 'category': 'L1', 'layer': 1, 'status': 'completed'},
+        {'name': 'sentiment', 'type': 'end', 'time': 3.0, 'category': 'L1', 'layer': 1, 'status': 'completed'},
+        # L1 evaluator fires (2/3 done)
+        {'name': 'eval_L1', 'type': 'decision', 'time': 3.8, 'category': 'evaluator', 'layer': 1, 'sufficient': True},
+        # Filings cancelled
+        {'name': 'filings', 'type': 'end', 'time': 3.8, 'category': 'L1', 'layer': 1, 'status': 'cancelled'},
+        # L2 analysis agents
+        {'name': 'risk', 'type': 'start', 'time': 4.0, 'category': 'L2', 'layer': 2},
+        {'name': 'valuation', 'type': 'start', 'time': 4.0, 'category': 'L2', 'layer': 2},
+        {'name': 'risk', 'type': 'end', 'time': 7.0, 'category': 'L2', 'layer': 2, 'status': 'completed'},
+        # L2 evaluator fires (1/2 done)
+        {'name': 'eval_L2', 'type': 'decision', 'time': 7.6, 'category': 'evaluator', 'layer': 2, 'sufficient': True},
+        {'name': 'valuation', 'type': 'end', 'time': 7.6, 'category': 'L2', 'layer': 2, 'status': 'cancelled'},
+        # Synthesizer
+        {'name': 'synthesizer', 'type': 'start', 'time': 7.8, 'category': 'synth', 'layer': 3},
+        {'name': 'synthesizer', 'type': 'end', 'time': 10.8, 'category': 'synth', 'layer': 3, 'status': 'completed'},
+    ]
+
+
+def simulate_pessimistic() -> list[dict]:
+    """Pessimistic: speculate at L1, reconcile when straggler arrives.
+    L2 uses optimistic (cancel). Shows full back-and-forth."""
+    return [
+        # ═══ PHASE 1: Speculative execution ═══════════════════════════════════
+        # L1 research agents
+        {'name': 'news', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1, 'phase': 1},
+        {'name': 'sentiment', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1, 'phase': 1},
+        {'name': 'filings', 'type': 'start', 'time': 0.0, 'category': 'L1', 'layer': 1, 'phase': 1},
+        {'name': 'news', 'type': 'end', 'time': 2.0, 'category': 'L1', 'layer': 1, 'status': 'completed', 'phase': 1},
+        {'name': 'sentiment', 'type': 'end', 'time': 3.0, 'category': 'L1', 'layer': 1, 'status': 'completed', 'phase': 1},
+        # L1 evaluator: sufficient (speculative) — filings still running!
+        {'name': 'eval_L1', 'type': 'decision', 'time': 3.8, 'category': 'evaluator', 'layer': 1, 'sufficient': True, 'phase': 1, 'note': 'speculative'},
+        # L2 agents start speculatively (with partial L1 data)
+        {'name': 'risk_v1', 'type': 'start', 'time': 4.0, 'category': 'L2', 'layer': 2, 'phase': 1},
+        {'name': 'valuation_v1', 'type': 'start', 'time': 4.0, 'category': 'L2', 'layer': 2, 'phase': 1},
+        {'name': 'risk_v1', 'type': 'end', 'time': 7.0, 'category': 'L2', 'layer': 2, 'status': 'completed', 'phase': 1},
+        # L2 evaluator (optimistic): sufficient, cancel valuation_v1
+        {'name': 'eval_L2_v1', 'type': 'decision', 'time': 7.6, 'category': 'evaluator', 'layer': 2, 'sufficient': True, 'phase': 1},
+        {'name': 'valuation_v1', 'type': 'end', 'time': 7.6, 'category': 'L2', 'layer': 2, 'status': 'cancelled', 'phase': 1},
+        # Synthesizer v1 (speculative report)
+        {'name': 'synth_v1', 'type': 'start', 'time': 7.8, 'category': 'synth', 'layer': 3, 'phase': 1},
+        {'name': 'synth_v1', 'type': 'end', 'time': 10.8, 'category': 'synth', 'layer': 3, 'status': 'completed', 'phase': 1},
+
+        # ═══ PHASE 2: Reconciliation (filings arrives) ═══════════════════════
+        # Filings completes (the straggler)
+        {'name': 'filings', 'type': 'end', 'time': 15.0, 'category': 'L1', 'layer': 1, 'status': 'completed', 'phase': 2},
+        # L1 reconciler fires
+        {'name': 'recon_L1', 'type': 'decision', 'time': 15.8, 'category': 'reconciler', 'layer': 1, 'action': 'merge', 'severity': 'high', 'phase': 2},
+        # L2 re-runs with full data
+        {'name': 'risk_v2', 'type': 'start', 'time': 16.0, 'category': 'L2', 'layer': 2, 'phase': 2},
+        {'name': 'valuation_v2', 'type': 'start', 'time': 16.0, 'category': 'L2', 'layer': 2, 'phase': 2},
+        {'name': 'risk_v2', 'type': 'end', 'time': 19.0, 'category': 'L2', 'layer': 2, 'status': 'completed', 'phase': 2},
+        # L2 evaluator v2 (optimistic at L2)
+        {'name': 'eval_L2_v2', 'type': 'decision', 'time': 19.6, 'category': 'evaluator', 'layer': 2, 'sufficient': True, 'phase': 2},
+        {'name': 'valuation_v2', 'type': 'end', 'time': 19.6, 'category': 'L2', 'layer': 2, 'status': 'cancelled', 'phase': 2},
+        # Synthesizer v2 (reconciled report)
+        {'name': 'synth_v2', 'type': 'start', 'time': 19.8, 'category': 'synth', 'layer': 3, 'phase': 2},
+        {'name': 'synth_v2', 'type': 'end', 'time': 22.8, 'category': 'synth', 'layer': 3, 'status': 'completed', 'phase': 2},
+    ]
+
+
+# ─── Span Builder ─────────────────────────────────────────────────────────────
+
+
+def build_spans(events: list[dict]) -> list[dict]:
+    """Convert event list into span objects for Gantt rendering."""
+    spans: dict[str, dict] = {}
+
+    for ev in events:
+        name = ev['name']
+        if ev['type'] == 'start':
+            spans[name] = {
+                'name': name,
+                'start': ev['time'],
+                'end': ev['time'],  # will be updated on 'end'
+                'status': 'running',
+                'category': ev.get('category', ''),
+                'layer': ev.get('layer', 0),
+                'phase': ev.get('phase', 0),
+                'label': '',
+            }
+        elif ev['type'] == 'end':
+            if name in spans:
+                spans[name]['end'] = ev['time']
+                spans[name]['status'] = ev.get('status', 'completed')
+        elif ev['type'] == 'decision':
+            spans[name] = {
+                'name': name,
+                'start': ev['time'] - 0.7,
+                'end': ev['time'],
+                'status': 'decision',
+                'category': ev['category'],
+                'layer': ev.get('layer', 0),
+                'phase': ev.get('phase', 0),
+                'label': '',
+            }
+            if ev['category'] == 'evaluator':
+                spans[name]['label'] = f"sufficient={ev.get('sufficient', '?')}"
+            elif ev['category'] == 'reconciler':
+                spans[name]['label'] = f"{ev.get('action','?')} ({ev.get('severity','?')})"
+
+    return list(spans.values())
+
+
+# ─── HTML Generation ──────────────────────────────────────────────────────────
+
+
+def generate_html(
+    std_spans: list, opt_spans: list, pes_spans: list,
+    std_events: list, opt_events: list, pes_events: list,
+    output_path: str,
+):
+    std_end = max(s['end'] for s in std_spans)
+    opt_end = max(s['end'] for s in opt_spans)
+    pes_end = max(s['end'] for s in pes_spans)
+    max_dur = max(std_end, opt_end, pes_end)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Layer Pipeline — Three Modes Compared</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {{
+  --bg:#f4f5f7;--card:#fff;--border:#d1d5db;--text:#1f2937;--dim:#6b7280;
+  --blue:#2563eb;--blue-lt:#dbeafe;--green:#059669;--green-lt:#d1fae5;
+  --red:#dc2626;--red-lt:#fee2e2;--purple:#7c3aed;--purple-lt:#ede9fe;
+  --orange:#d97706;--orange-lt:#fef3c7;--gray:#9ca3af;--gray-lt:#e5e7eb;
+  --teal:#0d9488;--teal-lt:#ccfbf1;
+}}
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);padding:16px 20px;font-size:13px}}
+h1{{font-size:18px;font-weight:700;margin-bottom:2px}}
+.sub{{font-size:11px;color:var(--dim);margin-bottom:14px}}
+
+/* Controls */
+.controls{{background:var(--card);border:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;gap:10px;margin-bottom:14px;border-radius:6px}}
+.btn{{border:1px solid var(--border);padding:5px 12px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;border-radius:4px;display:inline-flex;align-items:center;gap:5px}}
+.btn-play{{background:var(--blue);color:#fff;border-color:var(--blue)}}
+.btn-play:hover{{background:#1d4ed8}}
+.btn-sec{{background:var(--card);color:var(--text)}}
+.btn-sec:hover{{background:var(--gray-lt)}}
+.slider-wrap{{flex:1;display:flex;align-items:center;gap:8px}}
+.slider{{width:100%;-webkit-appearance:none;background:var(--gray-lt);height:4px;outline:none;cursor:pointer;border-radius:2px}}
+.slider::-webkit-slider-thumb{{-webkit-appearance:none;width:14px;height:14px;background:var(--blue);border-radius:50%;cursor:pointer}}
+.clock{{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;min-width:55px;text-align:right}}
+
+/* Metrics */
+.metrics{{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:14px}}
+.metric{{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 8px;text-align:center}}
+.metric .val{{font-size:18px;font-weight:700;margin-bottom:1px}}
+.metric .desc{{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.3px}}
+.val-gray{{color:var(--gray)}}.val-blue{{color:var(--blue)}}.val-green{{color:var(--green)}}
+.val-purple{{color:var(--purple)}}.val-orange{{color:var(--orange)}}.val-red{{color:var(--red)}}
+
+/* Three panels */
+.panels{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px}}
+@media(max-width:1200px){{.panels{{grid-template-columns:1fr}}}}
+.panel{{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px;overflow:hidden}}
+.panel.p-std{{border-top:3px solid var(--gray)}}
+.panel.p-opt{{border-top:3px solid var(--blue)}}
+.panel.p-pes{{border-top:3px solid var(--purple)}}
+.panel-head{{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--gray-lt)}}
+.panel-title{{font-size:12px;font-weight:700}}
+.badge{{font-size:8px;font-weight:600;padding:2px 6px;border-radius:3px;text-transform:uppercase;letter-spacing:.3px}}
+.badge-gray{{background:#f3f4f6;color:var(--dim);border:1px solid var(--gray-lt)}}
+.badge-blue{{background:var(--blue-lt);color:var(--blue);border:1px solid #93c5fd}}
+.badge-purple{{background:var(--purple-lt);color:var(--purple);border:1px solid #c4b5fd}}
+
+/* Phase separator */
+.phase-sep{{margin:6px 0;padding:3px 0;border-top:2px dashed var(--purple);position:relative}}
+.phase-sep::before{{content:attr(data-label);position:absolute;top:-8px;left:4px;font-size:8px;font-weight:700;color:var(--purple);background:var(--card);padding:0 4px}}
+
+/* Gantt */
+.gantt-row{{display:flex;align-items:center;margin-bottom:2px;height:20px}}
+.gantt-lbl{{width:85px;font-size:9px;color:var(--dim);font-weight:500;text-align:right;padding-right:6px;flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.gantt-track{{flex:1;position:relative;height:16px;background:#f9fafb;border:1px solid var(--gray-lt);border-radius:2px;overflow:hidden}}
+.gantt-bar{{position:absolute;height:100%;display:flex;align-items:center;padding-left:4px;font-size:7px;color:#fff;font-weight:500;white-space:nowrap;border-radius:1px;transition:width .05s linear,left .05s linear}}
+.bar-L1{{background:var(--blue)}}
+.bar-L2{{background:var(--teal)}}
+.bar-cancelled{{background:var(--gray);opacity:.5}}
+.bar-evaluator{{background:var(--orange)}}
+.bar-reconciler{{background:var(--purple)}}
+.bar-synth{{background:#1e3a5f}}
+.bar-join{{background:var(--gray)}}
+
+/* SVG Node Graphs */
+.graph-container{{display:flex;justify-content:center;margin-bottom:10px;border-bottom:1px solid var(--gray-lt);padding-bottom:10px}}
+.flow-svg{{width:100%;max-height:340px}}
+.node-box{{fill:#fff;stroke:#c0c0c0;stroke-width:1px;cursor:pointer}}
+.node-g:hover .node-box{{stroke:var(--blue);stroke-width:2px}}
+.node-title{{font-family:'Inter',sans-serif;font-size:9px;font-weight:600;fill:var(--text);text-anchor:middle;pointer-events:none}}
+.node-sub{{font-family:'Inter',sans-serif;font-size:7px;fill:var(--dim);text-anchor:middle;pointer-events:none}}
+.edge-line{{stroke:#c0c0c0;stroke-width:1px;fill:none}}
+.edge-line.active{{stroke:var(--blue);stroke-width:1.5px;stroke-dasharray:5,3;animation:march .8s linear infinite}}
+.edge-line.done{{stroke:var(--blue);stroke-width:1.5px}}
+.edge-line.cancel{{stroke:var(--gray);stroke-dasharray:3,3}}
+.edge-line.recon-arc{{stroke:var(--purple);stroke-width:1.5px;stroke-dasharray:4,2}}
+@keyframes march{{to{{stroke-dashoffset:-16}}}}
+.node-g.pending .node-box{{fill:#f8f8f8;stroke:#d0d0d0}}
+.node-g.pending text{{opacity:.35}}
+.node-g.running .node-box{{fill:var(--blue-lt);stroke:var(--blue);stroke-width:2px}}
+.node-g.completed .node-box{{fill:var(--blue-lt);stroke:var(--blue);stroke-width:1.5px}}
+.node-g.completed .node-sub{{fill:var(--blue)}}
+.node-g.cancelled .node-box{{fill:#f5f5f5;stroke:var(--gray);stroke-dasharray:4,2}}
+.node-g.cancelled text{{opacity:.5}}
+.node-g.reconciling .node-box{{fill:var(--purple-lt);stroke:var(--purple);stroke-width:2px}}
+
+/* Console */
+.console-card{{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 12px}}
+.console-title{{font-size:12px;font-weight:700;margin-bottom:6px}}
+.console{{background:#f9fafb;border:1px solid var(--gray-lt);border-radius:4px;padding:6px 8px;font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--dim);max-height:180px;overflow-y:auto}}
+.console-line{{display:flex;gap:6px;line-height:1.6}}
+.c-time{{min-width:40px}}.c-flow{{min-width:30px;font-weight:700}}
+.c-name{{color:var(--text);font-weight:500;min-width:80px}}
+.c-action{{}}
+.c-action.cancelled{{color:var(--red)}}.c-action.recon{{color:var(--purple)}}
+
+.tooltip{{position:fixed;background:#fff;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;pointer-events:none;opacity:0;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,.1);max-width:240px;transition:opacity .12s}}
+.tooltip.vis{{opacity:1}}
+.tt-title{{font-weight:700;margin-bottom:2px}}.tt-row{{font-size:10px;color:var(--dim);line-height:1.5}}
+</style>
+</head>
+<body>
+
+<h1>Multi-Layer Pipeline — Three Modes Compared</h1>
+<p class="sub">L1: Research (news 2s, sentiment 3s, filings 15s) &rarr; L2: Analysis (risk 3s, valuation 10s) &rarr; Synthesizer &middot; Pessimistic vs Blind Optimism vs Pessimistic Optimism</p>
+
+<div class="controls">
+  <button id="playBtn" class="btn btn-play">&#9654; Play</button>
+  <button id="resetBtn" class="btn btn-sec">&#8635; Reset</button>
+  <button id="speedBtn" class="btn btn-sec">1&times;</button>
+  <div class="slider-wrap">
+    <input type="range" id="slider" class="slider" min="0" max="{max_dur:.2f}" step="0.05" value="0">
+  </div>
+  <div id="clock" class="clock">0.0s</div>
+</div>
+
+<div class="metrics">
+  <div class="metric"><div class="val val-gray">{std_end:.1f}s</div><div class="desc">Pessimistic</div></div>
+  <div class="metric"><div class="val val-blue">{opt_end:.1f}s</div><div class="desc">Blind Optimism</div></div>
+  <div class="metric"><div class="val val-purple">{pes_end:.1f}s</div><div class="desc">Pess. Optimism</div></div>
+  <div class="metric"><div class="val val-green">10.8s</div><div class="desc">1st Report (PO)</div></div>
+  <div class="metric"><div class="val val-orange">2</div><div class="desc">Reports (PO)</div></div>
+  <div class="metric"><div class="val val-red">1</div><div class="desc">Reconciliations</div></div>
+</div>
+
+<div class="panels">
+  <!-- PESSIMISTIC -->
+  <div class="panel p-std">
+    <div class="panel-head">
+      <span class="panel-title">Pessimistic</span>
+      <span class="badge badge-gray" id="std-badge">waiting</span>
+    </div>
+    <div class="graph-container">
+      <svg class="flow-svg" viewBox="0 0 300 340">
+        <defs>
+          <marker id="arr" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#c0c0c0"/></marker>
+          <marker id="arr-b" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="var(--blue)"/></marker>
+        </defs>
+        <!-- Edges -->
+        <path id="std-e-s-n" d="M150,30 L60,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-s-se" d="M150,30 L150,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-s-f" d="M150,30 L240,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-n-j1" d="M60,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-se-j1" d="M150,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-f-j1" d="M240,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-j1-r" d="M125,170 L100,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-j1-v" d="M175,170 L200,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-r-j2" d="M100,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-v-j2" d="M200,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="std-e-j2-sy" d="M150,290 L150,305" class="edge-line" marker-end="url(#arr)"/>
+        <!-- Nodes -->
+        <g class="node-g completed"><circle cx="150" cy="18" r="12" fill="var(--blue-lt)" stroke="var(--blue)" stroke-width="1"/><text x="150" y="21" class="node-title" style="font-size:7px">START</text></g>
+        <g id="std-n-news" class="node-g pending"><rect x="25" y="62" width="70" height="40" rx="2" class="node-box"/><text x="60" y="80" class="node-title">News</text><text x="60" y="92" class="node-sub">2s</text></g>
+        <g id="std-n-sent" class="node-g pending"><rect x="115" y="62" width="70" height="40" rx="2" class="node-box"/><text x="150" y="80" class="node-title">Sentiment</text><text x="150" y="92" class="node-sub">3s</text></g>
+        <g id="std-n-fil" class="node-g pending"><rect x="205" y="62" width="70" height="40" rx="2" class="node-box"/><text x="240" y="80" class="node-title">Filings</text><text x="240" y="92" class="node-sub">15s</text></g>
+        <g id="std-n-j1" class="node-g pending"><rect x="105" y="130" width="90" height="40" rx="2" class="node-box"/><text x="150" y="148" class="node-title">WaitAll L1</text><text x="150" y="160" class="node-sub">blocks 3/3</text></g>
+        <g id="std-n-risk" class="node-g pending"><rect x="55" y="195" width="90" height="40" rx="2" class="node-box"/><text x="100" y="213" class="node-title">Risk</text><text x="100" y="225" class="node-sub">3s</text></g>
+        <g id="std-n-val" class="node-g pending"><rect x="155" y="195" width="90" height="40" rx="2" class="node-box"/><text x="200" y="213" class="node-title">Valuation</text><text x="200" y="225" class="node-sub">10s</text></g>
+        <g id="std-n-j2" class="node-g pending"><rect x="105" y="255" width="90" height="35" rx="2" class="node-box"/><text x="150" y="270" class="node-title">WaitAll L2</text><text x="150" y="281" class="node-sub">blocks 2/2</text></g>
+        <g id="std-n-syn" class="node-g pending"><rect x="105" y="305" width="90" height="30" rx="2" class="node-box"/><text x="150" y="324" class="node-title">Synthesizer</text></g>
+      </svg>
+    </div>
+    <div id="gantt-std"></div>
+  </div>
+  <!-- BLIND OPTIMISM -->
+  <div class="panel p-opt">
+    <div class="panel-head">
+      <span class="panel-title">Blind Optimism</span>
+      <span class="badge badge-blue" id="opt-badge">waiting</span>
+    </div>
+    <div class="graph-container">
+      <svg class="flow-svg" viewBox="0 0 300 340">
+        <path id="opt-e-s-n" d="M150,30 L60,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-s-se" d="M150,30 L150,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-s-f" d="M150,30 L240,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-n-j1" d="M60,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-se-j1" d="M150,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-f-j1" d="M240,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-j1-r" d="M125,170 L100,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-j1-v" d="M175,170 L200,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-r-j2" d="M100,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-v-j2" d="M200,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="opt-e-j2-sy" d="M150,290 L150,305" class="edge-line" marker-end="url(#arr)"/>
+        <g class="node-g completed"><circle cx="150" cy="18" r="12" fill="var(--blue-lt)" stroke="var(--blue)" stroke-width="1"/><text x="150" y="21" class="node-title" style="font-size:7px">START</text></g>
+        <g id="opt-n-news" class="node-g pending"><rect x="25" y="62" width="70" height="40" rx="2" class="node-box"/><text x="60" y="80" class="node-title">News</text><text x="60" y="92" class="node-sub">2s</text></g>
+        <g id="opt-n-sent" class="node-g pending"><rect x="115" y="62" width="70" height="40" rx="2" class="node-box"/><text x="150" y="80" class="node-title">Sentiment</text><text x="150" y="92" class="node-sub">3s</text></g>
+        <g id="opt-n-fil" class="node-g pending"><rect x="205" y="62" width="70" height="40" rx="2" class="node-box"/><text x="240" y="80" class="node-title">Filings</text><text x="240" y="92" class="node-sub">15s</text></g>
+        <g id="opt-n-j1" class="node-g pending"><rect x="105" y="130" width="90" height="40" rx="2" class="node-box"/><text x="150" y="148" class="node-title">Eval L1</text><text x="150" y="160" class="node-sub">LLM gate</text></g>
+        <g id="opt-n-risk" class="node-g pending"><rect x="55" y="195" width="90" height="40" rx="2" class="node-box"/><text x="100" y="213" class="node-title">Risk</text><text x="100" y="225" class="node-sub">3s</text></g>
+        <g id="opt-n-val" class="node-g pending"><rect x="155" y="195" width="90" height="40" rx="2" class="node-box"/><text x="200" y="213" class="node-title">Valuation</text><text x="200" y="225" class="node-sub">10s</text></g>
+        <g id="opt-n-j2" class="node-g pending"><rect x="105" y="255" width="90" height="35" rx="2" class="node-box"/><text x="150" y="270" class="node-title">Eval L2</text><text x="150" y="281" class="node-sub">LLM gate</text></g>
+        <g id="opt-n-syn" class="node-g pending"><rect x="105" y="305" width="90" height="30" rx="2" class="node-box"/><text x="150" y="324" class="node-title">Synthesizer</text></g>
+      </svg>
+    </div>
+    <div id="gantt-opt"></div>
+  </div>
+  <!-- PESSIMISTIC OPTIMISM -->
+  <div class="panel p-pes">
+    <div class="panel-head">
+      <span class="panel-title">Pessimistic Optimism</span>
+      <span class="badge badge-purple" id="pes-badge">waiting</span>
+    </div>
+    <div class="graph-container">
+      <svg class="flow-svg" viewBox="0 0 300 340">
+        <path id="pes-e-s-n" d="M150,30 L60,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-s-se" d="M150,30 L150,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-s-f" d="M150,30 L240,60" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-n-j1" d="M60,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-se-j1" d="M150,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-f-j1" d="M240,105 L150,130" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-j1-r" d="M125,170 L100,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-j1-v" d="M175,170 L200,195" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-r-j2" d="M100,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-v-j2" d="M200,235 L150,255" class="edge-line" marker-end="url(#arr)"/>
+        <path id="pes-e-j2-sy" d="M150,290 L150,305" class="edge-line" marker-end="url(#arr)"/>
+        <!-- RECONCILIATION ARC: filings → back to join L1 -->
+        <path id="pes-e-recon" d="M275,102 C295,140 295,140 200,150" class="edge-line recon-arc" marker-end="url(#arr)" style="stroke:var(--purple);opacity:0"/>
+        <text id="pes-recon-label" x="280" y="128" style="font-size:7px;fill:var(--purple);font-weight:600;opacity:0">reconcile</text>
+        <g class="node-g completed"><circle cx="150" cy="18" r="12" fill="var(--blue-lt)" stroke="var(--blue)" stroke-width="1"/><text x="150" y="21" class="node-title" style="font-size:7px">START</text></g>
+        <g id="pes-n-news" class="node-g pending"><rect x="25" y="62" width="70" height="40" rx="2" class="node-box"/><text x="60" y="80" class="node-title">News</text><text x="60" y="92" class="node-sub">2s</text></g>
+        <g id="pes-n-sent" class="node-g pending"><rect x="115" y="62" width="70" height="40" rx="2" class="node-box"/><text x="150" y="80" class="node-title">Sentiment</text><text x="150" y="92" class="node-sub">3s</text></g>
+        <g id="pes-n-fil" class="node-g pending"><rect x="205" y="62" width="70" height="40" rx="2" class="node-box"/><text x="240" y="80" class="node-title">Filings</text><text x="240" y="92" class="node-sub">15s</text></g>
+        <g id="pes-n-j1" class="node-g pending"><rect x="105" y="130" width="90" height="40" rx="2" class="node-box"/><text x="150" y="148" class="node-title">Eval L1</text><text x="150" y="160" class="node-sub" id="pes-j1-sub">pessimistic</text></g>
+        <g id="pes-n-risk" class="node-g pending"><rect x="55" y="195" width="90" height="40" rx="2" class="node-box"/><text x="100" y="213" class="node-title">Risk</text><text x="100" y="225" class="node-sub">3s</text></g>
+        <g id="pes-n-val" class="node-g pending"><rect x="155" y="195" width="90" height="40" rx="2" class="node-box"/><text x="200" y="213" class="node-title">Valuation</text><text x="200" y="225" class="node-sub">10s</text></g>
+        <g id="pes-n-j2" class="node-g pending"><rect x="105" y="255" width="90" height="35" rx="2" class="node-box"/><text x="150" y="270" class="node-title">Eval L2</text><text x="150" y="281" class="node-sub">optimistic</text></g>
+        <g id="pes-n-syn" class="node-g pending"><rect x="105" y="305" width="90" height="30" rx="2" class="node-box"/><text x="150" y="324" class="node-title">Synthesizer</text></g>
+      </svg>
+    </div>
+    <div id="gantt-pes"></div>
+  </div>
+</div>
+
+<div class="console-card">
+  <div class="console-title">Event Log — Pessimistic vs Blind Optimism vs Pessimistic Optimism (interleaved)</div>
+  <div id="console" class="console"></div>
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script>
+const STD_SPANS = {json.dumps(std_spans)};
+const OPT_SPANS = {json.dumps(opt_spans)};
+const PES_SPANS = {json.dumps(pes_spans)};
+const STD_EVENTS = {json.dumps(std_events)};
+const OPT_EVENTS = {json.dumps(opt_events)};
+const PES_EVENTS = {json.dumps(pes_events)};
+const maxDur = {max_dur:.4f};
+
+const LABELS = {{
+  news:'News Agent',sentiment:'Sentiment',filings:'SEC Filings (slow)',
+  risk:'Risk Analyst',valuation:'Valuation (slow)',
+  risk_v1:'Risk v1 (spec)',valuation_v1:'Valuation v1',
+  risk_v2:'Risk v2 (recon)',valuation_v2:'Valuation v2',
+  join_L1:'WaitAll L1',join_L2:'WaitAll L2',
+  eval_L1:'Eval L1',eval_L2:'Eval L2',eval_L2_v1:'Eval L2 (spec)',eval_L2_v2:'Eval L2 (recon)',
+  recon_L1:'Reconciler L1',
+  synthesizer:'Synthesizer',synth_v1:'Synth v1 (spec)',synth_v2:'Synth v2 (recon)',
+}};
+
+function barCls(span) {{
+  if (span.status==='cancelled') return 'gantt-bar bar-cancelled';
+  if (span.category==='evaluator') return 'gantt-bar bar-evaluator';
+  if (span.category==='reconciler') return 'gantt-bar bar-reconciler';
+  if (span.category==='synth') return 'gantt-bar bar-synth';
+  if (span.category==='join') return 'gantt-bar bar-join';
+  if (span.category==='L1') return 'gantt-bar bar-L1';
+  if (span.category==='L2') return 'gantt-bar bar-L2';
+  return 'gantt-bar bar-join';
+}}
+
+function renderGantt(spans, containerId) {{
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  let lastPhase = 0;
+  spans.forEach(span => {{
+    // Phase separator for pessimistic
+    if (span.phase && span.phase > lastPhase && span.phase === 2) {{
+      const sep = document.createElement('div');
+      sep.className = 'phase-sep';
+      sep.setAttribute('data-label','RECONCILIATION PHASE');
+      el.appendChild(sep);
+      lastPhase = span.phase;
+    }}
+    const row = document.createElement('div');
+    row.className = 'gantt-row';
+    const lbl = document.createElement('div');
+    lbl.className = 'gantt-lbl';
+    lbl.textContent = span.label || LABELS[span.name] || span.name;
+    const track = document.createElement('div');
+    track.className = 'gantt-track';
+    const bar = document.createElement('div');
+    bar.id = containerId + '-bar-' + span.name;
+    bar.className = barCls(span);
+    // Tooltip
+    bar.addEventListener('mouseenter',(e)=>{{
+      const tt=document.getElementById('tooltip');
+      const dur=(span.end-span.start).toFixed(2);
+      tt.innerHTML=`<div class="tt-title">${{LABELS[span.name]||span.name}}</div>`
+        +`<div class="tt-row">Start: ${{span.start.toFixed(2)}}s &middot; End: ${{span.end.toFixed(2)}}s &middot; Duration: ${{dur}}s</div>`
+        +`<div class="tt-row">Status: ${{span.status}}${{span.phase?' &middot; Phase '+span.phase:''}}</div>`;
+      tt.style.left=(e.clientX+12)+'px';tt.style.top=(e.clientY-40)+'px';tt.classList.add('vis');
+    }});
+    bar.addEventListener('mouseleave',()=>document.getElementById('tooltip').classList.remove('vis'));
+    bar.addEventListener('mousemove',(e)=>{{const tt=document.getElementById('tooltip');tt.style.left=(e.clientX+12)+'px';tt.style.top=(e.clientY-40)+'px';}});
+    track.appendChild(bar);
+    row.appendChild(lbl);
+    row.appendChild(track);
+    el.appendChild(row);
+  }});
+}}
+
+renderGantt(STD_SPANS,'gantt-std');
+renderGantt(OPT_SPANS,'gantt-opt');
+renderGantt(PES_SPANS,'gantt-pes');
+
+let curTime=0, playing=false, interval=null, speed=1;
+const slider=document.getElementById('slider');
+const clock=document.getElementById('clock');
+const playBtn=document.getElementById('playBtn');
+const resetBtn=document.getElementById('resetBtn');
+const speedBtn=document.getElementById('speedBtn');
+const consoleDv=document.getElementById('console');
+
+function updateBars(spans, prefix, t) {{
+  spans.forEach(span => {{
+    const bar = document.getElementById(prefix+'-bar-'+span.name);
+    if (!bar) return;
+    if (t < span.start) {{ bar.style.width='0%'; bar.style.left='0%'; bar.textContent=''; return; }}
+    const left = (span.start/maxDur)*100;
+    const curEnd = Math.min(t, span.end);
+    const width = ((curEnd - span.start)/maxDur)*100;
+    bar.style.left = left+'%';
+    bar.style.width = Math.max(0.3, width)+'%';
+    bar.className = barCls(span);
+    const dur = curEnd - span.start;
+    bar.textContent = dur > 0.4 ? dur.toFixed(1)+'s' : '';
+  }});
+}}
+
+function updateBadge(id, elapsed, t) {{
+  const el = document.getElementById(id);
+  if (t <= 0) el.textContent = 'waiting';
+  else if (t >= elapsed) el.textContent = 'completed';
+  else el.textContent = 'running';
+}}
+
+// ─── SVG Node Graph State Updates ─────────────────────────────────
+function setNodeState(id, state) {{
+  const el = document.getElementById(id);
+  if (el) el.setAttribute('class', 'node-g ' + state);
+}}
+function setEdgeState(id, state) {{
+  const el = document.getElementById(id);
+  if (el) el.setAttribute('class', 'edge-line ' + state);
+}}
+
+function updateGraphs(t) {{
+  // ─── PESSIMISTIC ───
+  setNodeState('std-n-news', t<0.01?'pending':t<2?'running':'completed');
+  setNodeState('std-n-sent', t<0.01?'pending':t<3?'running':'completed');
+  setNodeState('std-n-fil', t<0.01?'pending':t<15?'running':'completed');
+  setNodeState('std-n-j1', t<15?'pending':t<15.1?'running':'completed');
+  setNodeState('std-n-risk', t<15.2?'pending':t<18.2?'running':'completed');
+  setNodeState('std-n-val', t<15.2?'pending':t<25.2?'running':'completed');
+  setNodeState('std-n-j2', t<25.2?'pending':t<25.3?'running':'completed');
+  setNodeState('std-n-syn', t<25.4?'pending':t<28.4?'running':'completed');
+  // std edges
+  setEdgeState('std-e-s-n', t>=0.01?'done':'');
+  setEdgeState('std-e-s-se', t>=0.01?'done':'');
+  setEdgeState('std-e-s-f', t>=0.01?'done':'');
+  setEdgeState('std-e-n-j1', t>=2?(t>=15?'done':'active'):'');
+  setEdgeState('std-e-se-j1', t>=3?(t>=15?'done':'active'):'');
+  setEdgeState('std-e-f-j1', t>=15?'done':'');
+  setEdgeState('std-e-j1-r', t>=15.1?(t>=15.2?'done':'active'):'');
+  setEdgeState('std-e-j1-v', t>=15.1?(t>=15.2?'done':'active'):'');
+  setEdgeState('std-e-r-j2', t>=18.2?(t>=25.2?'done':'active'):'');
+  setEdgeState('std-e-v-j2', t>=25.2?'done':'');
+  setEdgeState('std-e-j2-sy', t>=25.3?'done':'');
+
+  // ─── BLIND OPTIMISM ───
+  setNodeState('opt-n-news', t<0.01?'pending':t<2?'running':'completed');
+  setNodeState('opt-n-sent', t<0.01?'pending':t<3?'running':'completed');
+  setNodeState('opt-n-fil', t<0.01?'pending':t<3.8?'running':'cancelled');
+  setNodeState('opt-n-j1', t<3?'pending':t<3.8?'running':'completed');
+  setNodeState('opt-n-risk', t<4?'pending':t<7?'running':'completed');
+  setNodeState('opt-n-val', t<4?'pending':t<7.6?'running':'cancelled');
+  setNodeState('opt-n-j2', t<7?'pending':t<7.6?'running':'completed');
+  setNodeState('opt-n-syn', t<7.8?'pending':t<10.8?'running':'completed');
+  setEdgeState('opt-e-s-n', t>=0.01?'done':'');
+  setEdgeState('opt-e-s-se', t>=0.01?'done':'');
+  setEdgeState('opt-e-s-f', t>=0.01?(t>=3.8?'cancel':'done'):'');
+  setEdgeState('opt-e-n-j1', t>=2?'done':'');
+  setEdgeState('opt-e-se-j1', t>=3?'done':'');
+  setEdgeState('opt-e-f-j1', t>=3.8?'cancel':'');
+  setEdgeState('opt-e-j1-r', t>=4?'done':'');
+  setEdgeState('opt-e-j1-v', t>=4?(t>=7.6?'cancel':'done'):'');
+  setEdgeState('opt-e-r-j2', t>=7?'done':'');
+  setEdgeState('opt-e-v-j2', t>=7.6?'cancel':'');
+  setEdgeState('opt-e-j2-sy', t>=7.6?'done':'');
+
+  // ─── PESSIMISTIC OPTIMISM ───
+  setNodeState('pes-n-news', t<0.01?'pending':t<2?'running':'completed');
+  setNodeState('pes-n-sent', t<0.01?'pending':t<3?'running':'completed');
+  setNodeState('pes-n-fil', t<0.01?'pending':t<15?'running':'completed');
+  // Join L1: speculative at 3.8, reconciling at 15-15.8
+  if (t<3) setNodeState('pes-n-j1','pending');
+  else if (t<3.8) setNodeState('pes-n-j1','running');
+  else if (t<15) setNodeState('pes-n-j1','completed');
+  else if (t<15.8) setNodeState('pes-n-j1','reconciling');
+  else setNodeState('pes-n-j1','completed');
+  // L2 nodes: phase 1 then phase 2
+  if (t<4) setNodeState('pes-n-risk','pending');
+  else if (t<7) setNodeState('pes-n-risk','running');
+  else if (t<16) setNodeState('pes-n-risk','completed');
+  else if (t<19) setNodeState('pes-n-risk','running');// v2
+  else setNodeState('pes-n-risk','completed');
+  if (t<4) setNodeState('pes-n-val','pending');
+  else if (t<7.6) setNodeState('pes-n-val','running');
+  else if (t<16) setNodeState('pes-n-val','cancelled');
+  else if (t<19.6) setNodeState('pes-n-val','running');// v2
+  else setNodeState('pes-n-val','cancelled');
+  // J2
+  if (t<7) setNodeState('pes-n-j2','pending');
+  else if (t<7.6) setNodeState('pes-n-j2','running');
+  else if (t<19) setNodeState('pes-n-j2','completed');
+  else if (t<19.6) setNodeState('pes-n-j2','running');
+  else setNodeState('pes-n-j2','completed');
+  // Synth
+  if (t<7.8) setNodeState('pes-n-syn','pending');
+  else if (t<10.8) setNodeState('pes-n-syn','running');
+  else if (t<19.8) setNodeState('pes-n-syn','completed');
+  else if (t<22.8) setNodeState('pes-n-syn','running');
+  else setNodeState('pes-n-syn','completed');
+  // Edges
+  setEdgeState('pes-e-s-n', t>=0.01?'done':'');
+  setEdgeState('pes-e-s-se', t>=0.01?'done':'');
+  setEdgeState('pes-e-s-f', t>=0.01?'done':'');
+  setEdgeState('pes-e-n-j1', t>=2?'done':'');
+  setEdgeState('pes-e-se-j1', t>=3?'done':'');
+  setEdgeState('pes-e-f-j1', t>=15?'done':'');
+  setEdgeState('pes-e-j1-r', t>=4?'done':'');
+  setEdgeState('pes-e-j1-v', t>=4?'done':'');
+  setEdgeState('pes-e-r-j2', t>=7?(t>=19?'done':'active'):'');
+  setEdgeState('pes-e-v-j2', t>=7.6?(t>=19.6?'cancel':''):'');
+  setEdgeState('pes-e-j2-sy', t>=7.6?'done':'');
+  // Reconciliation arc
+  const reconArc = document.getElementById('pes-e-recon');
+  const reconLbl = document.getElementById('pes-recon-label');
+  const j1Sub = document.getElementById('pes-j1-sub');
+  if (t >= 15) {{
+    reconArc.style.opacity = '1';
+    reconLbl.style.opacity = '1';
+    j1Sub.textContent = 'RECONCILING';
+    j1Sub.style.fill = 'var(--purple)';
+  }} else if (t >= 3.8) {{
+    reconArc.style.opacity = '0';
+    reconLbl.style.opacity = '0';
+    j1Sub.textContent = 'speculative ✓';
+    j1Sub.style.fill = 'var(--blue)';
+  }} else {{
+    reconArc.style.opacity = '0';
+    reconLbl.style.opacity = '0';
+    j1Sub.textContent = 'pessimistic';
+    j1Sub.style.fill = '';
+  }}
+}}
+
+function updateUI(t) {{
+  curTime = parseFloat(t);
+  slider.value = curTime;
+  clock.textContent = curTime.toFixed(1)+'s';
+  updateBars(STD_SPANS, 'gantt-std', curTime);
+  updateBars(OPT_SPANS, 'gantt-opt', curTime);
+  updateBars(PES_SPANS, 'gantt-pes', curTime);
+  updateBadge('std-badge', {std_end}, curTime);
+  updateBadge('opt-badge', {opt_end}, curTime);
+  updateBadge('pes-badge', {pes_end}, curTime);
+  updateGraphs(curTime);
+  updateConsole(curTime);
+}}
+
+function updateConsole(t) {{
+  consoleDv.innerHTML = '';
+  const all = [];
+  STD_EVENTS.forEach(e => all.push({{...e, flow:'PES'}}));
+  OPT_EVENTS.forEach(e => all.push({{...e, flow:'BLIND'}}));
+  PES_EVENTS.forEach(e => all.push({{...e, flow:'PO'}}));
+  all.sort((a,b) => a.time - b.time);
+
+  const flowColors = {{PES:'var(--gray)',BLIND:'var(--blue)',PO:'var(--purple)'}};
+
+  all.forEach(ev => {{
+    if (ev.time > t) return;
+    const line = document.createElement('div'); line.className='console-line';
+    const ts = document.createElement('span'); ts.className='c-time'; ts.textContent=ev.time.toFixed(1)+'s';
+    const fl = document.createElement('span'); fl.className='c-flow'; fl.style.color=flowColors[ev.flow]; fl.textContent=ev.flow;
+    const nm = document.createElement('span'); nm.className='c-name'; nm.textContent=LABELS[ev.name]||ev.name;
+    const ac = document.createElement('span');
+    let action = ev.type==='start'?'started':ev.type==='end'?(ev.status||'completed'):'';
+    if (ev.type==='decision' && ev.category==='evaluator') action='sufficient='+ev.sufficient;
+    if (ev.type==='decision' && ev.category==='reconciler') action=ev.action+' (sev:'+ev.severity+')';
+    ac.className = 'c-action'+(ev.status==='cancelled'?' cancelled':ev.category==='reconciler'?' recon':'');
+    ac.textContent = action;
+    line.appendChild(ts); line.appendChild(fl); line.appendChild(nm); line.appendChild(ac);
+    consoleDv.appendChild(line);
+  }});
+  consoleDv.scrollTop = consoleDv.scrollHeight;
+}}
+
+function play() {{
+  if (curTime >= maxDur) curTime = 0;
+  playing = true; playBtn.innerHTML='&#9646;&#9646; Pause';
+  interval = setInterval(()=>{{
+    curTime += 0.1*speed;
+    if (curTime >= maxDur) {{ curTime=maxDur; pause(); }}
+    updateUI(curTime);
+  }}, 50);
+}}
+function pause() {{ playing=false; clearInterval(interval); playBtn.innerHTML='&#9654; Play'; }}
+playBtn.addEventListener('click',()=>playing?pause():play());
+resetBtn.addEventListener('click',()=>{{pause();updateUI(0);}});
+slider.addEventListener('input',(e)=>{{pause();updateUI(e.target.value);}});
+speedBtn.addEventListener('click',()=>{{speed=speed===1?2:speed===2?4:1;speedBtn.textContent=speed+'\\u00d7';}});
+
+updateUI(0);
+play();
+</script>
+</body>
+</html>"""
+    Path(output_path).write_text(html)
+    return output_path
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+
+def main():
+    print('\n' + '=' * 60)
+    print('  MULTI-LAYER PIPELINE — THREE-WAY COMPARISON VISUALIZER')
+    print('=' * 60)
+    print('\n  Generating simulated timelines (no LLM calls)...\n')
+
+    std_events = simulate_standard()
+    opt_events = simulate_optimistic()
+    pes_events = simulate_pessimistic()
+
+    std_spans = build_spans(std_events)
+    opt_spans = build_spans(opt_events)
+    pes_spans = build_spans(pes_events)
+
+    std_end = max(s['end'] for s in std_spans)
+    opt_end = max(s['end'] for s in opt_spans)
+    pes_end = max(s['end'] for s in pes_spans)
+
+    print(f'  Pessimistic:             {std_end:.1f}s — 1 report, 0 reconciliations')
+    print(f'  Blind Optimism:          {opt_end:.1f}s — 1 report, 0 reconciliations')
+    print(f'  Pessimistic Optimism:  {pes_end:.1f}s — 2 reports, 1 reconciliation')
+    print(f'    └─ 1st report at 10.8s (speculative)')
+    print(f'    └─ 2nd report at 22.8s (reconciled with SEC filings)')
+    print()
+
+    output_dir = Path(__file__).resolve().parent / 'output'
+    output_dir.mkdir(exist_ok=True)
+    html_path = str(output_dir / 'multilayer.html')
+
+    generate_html(std_spans, opt_spans, pes_spans, std_events, opt_events, pes_events, html_path)
+    print(f'  ✓ Saved: {html_path}')
+    print(f'  Opening in browser...\n')
+    webbrowser.open(f'file://{html_path}')
+
+
+if __name__ == '__main__':
+    main()
