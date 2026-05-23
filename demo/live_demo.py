@@ -179,14 +179,14 @@ class DynamicWorkflowBuilder:
         
         join_node = mock_join
         
-        # Create mock synthesizer - use Agent for better event capture
-        synthesizer = Agent(
-            name='synthesizer',
-            instruction=(
-                'You are a financial analyst. Synthesize the research data into a concise 3-5 sentence briefing. '
-                'Highlight key insights, risks, and recommendations.'
-            ),
-        )
+        # Create mock synthesizer
+        @node(name='synthesizer')
+        async def mock_synthesizer(ctx, node_input: str):
+            """Mock synthesizer that combines agent outputs."""
+            await asyncio.sleep(1)
+            yield 'SYNTHESIS: Based on the research data, the investment case shows mixed signals. Key factors include market sentiment, fundamental metrics, and risk profile. Recommendation: Proceed with caution and monitor for additional data points.'
+        
+        synthesizer = mock_synthesizer
         
         # Build workflow using edges list
         edges = []
